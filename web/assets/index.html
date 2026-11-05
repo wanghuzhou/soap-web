@@ -1,5 +1,93 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head><meta charset="utf-8"><title>soap-web</title></head>
-<body><h1>soap-web 启动中（前端占位）</h1></body>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>soap-web · SOAP 接口调试</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">§</span>
+        <span class="title">soap-web</span>
+        <span class="subtitle">SOAP / WSDL 接口调试</span>
+      </div>
+      <div class="topbar-actions">
+        <button id="btnImport" class="btn ghost" title="导入 SoapUI 工程 (.xml)">导入 SoapUI 工程</button>
+        <button id="btnWsdl" class="btn ghost" title="解析 WSDL 生成请求">解析 WSDL</button>
+        <span id="serverState" class="badge">就绪</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <!-- Left: project tree -->
+      <aside class="sidebar">
+        <div class="pane-head">工程</div>
+        <div id="tree" class="tree">
+          <div class="empty-hint">导入 SoapUI 工程或解析 WSDL 后<br>操作会显示在这里。</div>
+        </div>
+      </aside>
+
+      <!-- Center: request editor -->
+      <section class="editor-pane">
+        <div class="pane-head">
+          <span>请求</span>
+          <span id="reqTitle" class="muted"></span>
+        </div>
+        <div class="req-controls">
+          <div class="field-row">
+            <label>Endpoint</label>
+            <input id="endpoint" type="text" placeholder="http://host/service.asmx" spellcheck="false">
+          </div>
+          <div class="field-row">
+            <label>SOAPAction</label>
+            <input id="soapAction" type="text" placeholder="http://tempuri.org/Op" spellcheck="false">
+          </div>
+          <div class="field-row">
+            <label>Content-Type</label>
+            <select id="contentType">
+              <option value="text/xml; charset=utf-8">text/xml (SOAP 1.1)</option>
+              <option value="application/soap+xml; charset=utf-8">application/soap+xml (SOAP 1.2)</option>
+            </select>
+          </div>
+        </div>
+        <div class="editor-wrap">
+          <textarea id="requestBody" spellcheck="false" placeholder="&lt;soapenv:Envelope ...&gt; ... &lt;/soapenv:Envelope&gt;"></textarea>
+        </div>
+        <div class="send-bar">
+          <button id="btnSend" class="btn primary">发送请求 <span class="kbd">Ctrl+Enter</span></button>
+          <button id="btnFormat" class="btn ghost">格式化 XML</button>
+          <span id="sendInfo" class="send-info"></span>
+        </div>
+      </section>
+
+      <!-- Right: response -->
+      <section class="response-pane">
+        <div class="pane-head">
+          <span>响应</span>
+          <div class="resp-tabs">
+            <button class="tab active" data-view="pretty">格式化</button>
+            <button class="tab" data-view="raw">原始</button>
+            <button class="tab" data-view="headers">Headers</button>
+          </div>
+        </div>
+        <div id="respMeta" class="resp-meta hidden">
+          <span id="respStatus" class="status-pill"></span>
+          <span id="respTime" class="muted"></span>
+          <span id="respSize" class="muted"></span>
+        </div>
+        <pre id="respBody" class="resp-body">
+<span class="empty-hint">发送请求后，响应会显示在这里。</span>
+        </pre>
+      </section>
+    </main>
+  </div>
+
+  <input id="fileInput" type="file" accept=".xml,.wsdl" hidden>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/app.js"></script>
+</body>
 </html>
