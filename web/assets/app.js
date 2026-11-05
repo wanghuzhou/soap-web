@@ -25,36 +25,84 @@ function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-// Pretty-print XML with basic indentation.
+// Pretty-print XML with indentation. CDATA and comments keep their inner
+// content untouched (whitespace inside CDATA is significant and must not be
+// reflowed). Returns input unchanged if it does not look like XML.
 function prettyXML(xml) {
-  const text = xml.trim();
-  if (!text) return '';
-  // If not obviously XML, return as-is.
-  if (!text.startsWith('<')) return xml;
+  const text = xml == null ? '' : xml;
+  if (!text.trim() || text.trim()[0] !== '<') return text;
 
-  let formatted = '';
+  // Tokenise into CDATA, comments, PIs, opening/closing/self-closing tags, text.
+  const re = /<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/?[^>]+>|[^<]+/g;
+  const toks = [];
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const raw = m[0];
+    if (raw.trim() === '' && !/^\s*$/.test(raw)) { /* keep */ }
+    toks.push(raw);
+  }
+
+  let out = '';
   let pad = 0;
   const padStr = () => '  '.repeat(pad);
-  // Tokenise roughly.
-  const tokens = text.replace(/>\s*</g, '><').split(/(?=<)/g);
-  for (let tok of tokens) {
-    tok = tok.trim();
-    if (!tok) continue;
-    if (/^<\?/.test(tok) || /^<!/.test(tok)) {
-      formatted += padStr() + tok + '\n';
-    } else if (/^<\/[^>]+>$/.test(tok)) {
+
+  for (let i = 0; i < toks.length; i++) {
+    const raw = toks[i];
+    const t = raw.trim();
+    if (t === '') continue;
+
+    const isCdata = t.startsWith('<![CDATA[');
+    const isComment = t.startsWith('<!--');
+    const isPI = t.startsWith('<?');
+    const isClose = /^<\//.test(t);
+    const isSelf = /^<[^>]+\/>$/.test(t);
+    const isOpen = /^<[^>]+>$/.test(t) && !isClose && !isSelf;
+
+    if (isCdata || isComment || isPI) {
+      out += padStr() + t + '\n';
+    } else if (isClose) {
       pad = Math.max(0, pad - 1);
-      formatted += padStr() + tok + '\n';
-    } else if (/^<[^>]+\/>$/.test(tok)) {
-      formatted += padStr() + tok + '\n';
-    } else if (/^<[^>]+>$/.test(tok)) {
-      formatted += padStr() + tok + '\n';
-      pad++;
+      out += padStr() + t + '\n';
+    } else if (isSelf) {
+      out += padStr() + t + '\n';
+    } else if (isOpen) {
+      // Look ahead: if the next meaningful token is text (not a tag), print the
+      // opening tag, the text, and the following closing tag together on a line.
+      let j = i + 1;
+      while (j < toks.length && toks[j].trim() === '') j++;
+      const nextTok = j < toks.length ? toks[j] : '';
+      const nextIsText = nextTok !== '' && !nextTok.trim().startsWith('<');
+      if (nextIsText) {
+        // Find the closing tag after the text.
+        let k = j + 1;
+        while (k < toks.length && toks[k].trim() === '') k++;
+        const closeTok = k < toks.length ? toks[k].trim() : '';
+        out += padStr() + t + nextTok.trim() + closeTok + '\n';
+        i = k; // consume text + closing tag
+      } else {
+        out += padStr() + t + '\n';
+        pad++;
+      }
     } else {
-      formatted += padStr() + tok + '\n';
+      // Lone text node.
+      out += padStr() + t + '\n';
     }
   }
-  return formatted.replace(/\n$/, '');
+  return out.replace(/\n$/, '');
+}
+
+// Minify XML: strip whitespace between tags while preserving CDATA/comments.
+function minifyXML(xml) {
+  const text = xml == null ? '' : xml;
+  // Protect CDATA and comments by placeholders.
+  const store = [];
+  let s = text.replace(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->/g, (m) => {
+    store.push(m);
+    return '\u0000' + (store.length - 1) + '\u0000';
+  });
+  s = s.replace(/>\s+</g, '><').trim();
+  s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => store[+i]);
+  return s;
 }
 
 function highlightXML(xml) {
@@ -74,6 +122,44 @@ function highlightXML(xml) {
   return s;
 }
 
+/* ---------------- Editor: highlighted overlay ---------------- */
+// Renders the request body into the highlight layer and keeps both layers'
+// scroll positions in sync.
+function syncHighlight() {
+  const ta = $('requestBody');
+  const hl = $('requestHighlight');
+  if (!ta || !hl) return;
+  // A trailing newline keeps the highlight layer the same height as the textarea
+  // when the content ends with a newline.
+  hl.innerHTML = highlightXML(ta.value) + '\n';
+  hl.scrollTop = ta.scrollTop;
+  hl.scrollLeft = ta.scrollLeft;
+}
+
+// Set the request editor content (optionally formatting first).
+function setRequestBody(value, doFormat) {
+  const ta = $('requestBody');
+  let v = normalizeNewlines(value || '');
+  if (doFormat) v = prettyXML(v);
+  ta.value = v;
+  syncHighlight();
+}
+
+// SoapUI stores line breaks in some projects as the literal two-character
+// sequence "\r" / "\n" followed by a newline. Normalise these to real newlines
+// so the editor shows clean, readable XML instead of stray "\r" tokens.
+function normalizeNewlines(s) {
+  // SoapUI sometimes stores line breaks as literal two-character sequences
+  // ("\r\n", "\r", "\n") often immediately followed by a real newline, which
+  // yields a doubled break. Collapse that combination precisely, without
+  // disturbing intentional blank lines inside CDATA.
+  s = s.replace(/\\(r|n)(\\r|\\n)?[ \t]*\r?\n/g, '\n');
+  s = s.replace(/\\(r|n)(\\r|\\n)?/g, '\n');
+  // Normalise real CRLF / CR to LF.
+  s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  return s;
+}
+
 /* ---------------- Request fields ---------------- */
 function loadNode(node, kind, parentOp) {
   state.selected = { kind, node };
@@ -84,7 +170,8 @@ function loadNode(node, kind, parentOp) {
   $('reqTitle').textContent = title;
   $('endpoint').value = node.endpoint || (parentOp && parentOp.endpoint) || '';
   $('soapAction').value = node.soapAction || node.action || (parentOp && parentOp.soapAction) || '';
-  $('requestBody').value = node.request || '';
+  const autoFmt = $('autoFormat') ? $('autoFormat').checked : true;
+  setRequestBody(node.request || '', autoFmt);
   renderTree();
 }
 
@@ -301,7 +388,14 @@ function pickFile(mode) {
 window.addEventListener('DOMContentLoaded', () => {
   $('btnSend').addEventListener('click', send);
   $('btnFormat').addEventListener('click', () => {
-    $('requestBody').value = prettyXML($('requestBody').value);
+    const ta = $('requestBody');
+    ta.value = prettyXML(ta.value);
+    syncHighlight();
+  });
+  $('btnMinify').addEventListener('click', () => {
+    const ta = $('requestBody');
+    ta.value = minifyXML(ta.value);
+    syncHighlight();
   });
   $('btnImport').addEventListener('click', () => pickFile('soapui'));
   $('btnWsdl').addEventListener('click', () => pickFile('wsdl'));
@@ -322,18 +416,34 @@ window.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Ctrl+Enter to send
+  // Keep the highlight layer in sync while editing / scrolling.
+  const ta = $('requestBody');
+  ta.addEventListener('input', syncHighlight);
+  ta.addEventListener('scroll', syncHighlight);
+  ta.addEventListener('change', syncHighlight);
+  window.addEventListener('resize', syncHighlight);
+
+  // Ctrl+Enter to send; Ctrl+Shift+F to format.
   document.addEventListener('keydown', (e) => {
     if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); send(); }
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
+      e.preventDefault();
+      ta.value = prettyXML(ta.value);
+      syncHighlight();
+    }
   });
 
   // Tab inserts spaces in the editor
-  $('requestBody').addEventListener('keydown', (e) => {
+  ta.addEventListener('keydown', (e) => {
     if (e.key === 'Tab') {
       e.preventDefault();
       const el = e.target; const s = el.selectionStart; const en = el.selectionEnd;
       el.value = el.value.slice(0, s) + '  ' + el.value.slice(en);
       el.selectionStart = el.selectionEnd = s + 2;
+      syncHighlight();
     }
   });
+
+  // Initial paint.
+  syncHighlight();
 });

@@ -53,12 +53,16 @@
             </select>
           </div>
         </div>
-        <div class="editor-wrap">
-          <textarea id="requestBody" spellcheck="false" placeholder="&lt;soapenv:Envelope ...&gt; ... &lt;/soapenv:Envelope&gt;"></textarea>
+        <div class="editor-wrap" id="editorWrap">
+          <!-- Highlight layer sits behind a transparent textarea for syntax colouring. -->
+          <pre id="requestHighlight" class="editor-highlight" aria-hidden="true"></pre>
+          <textarea id="requestBody" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" wrap="off" placeholder="&lt;soapenv:Envelope ...&gt; ... &lt;/soapenv:Envelope&gt;"></textarea>
         </div>
         <div class="send-bar">
           <button id="btnSend" class="btn primary">发送请求 <span class="kbd">Ctrl+Enter</span></button>
-          <button id="btnFormat" class="btn ghost">格式化 XML</button>
+          <button id="btnFormat" class="btn ghost" title="美化 XML 缩进 (Ctrl+Shift+F)">格式化 XML</button>
+          <button id="btnMinify" class="btn ghost" title="压缩为单行">压缩</button>
+          <label class="auto-format"><input id="autoFormat" type="checkbox" checked> 载入时自动格式化</label>
           <span id="sendInfo" class="send-info"></span>
         </div>
       </section>
