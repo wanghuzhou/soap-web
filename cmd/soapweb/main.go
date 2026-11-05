@@ -19,6 +19,10 @@ func main() {
 	open := flag.Bool("open", true, "启动后自动打开浏览器")
 	flag.Parse()
 
+	// On Windows, switch the console to UTF-8 so Chinese log lines display
+	// correctly regardless of the system default code page.
+	setConsoleUTF8()
+
 	srv := &api.Server{StaticFS: web.FS()}
 	mux := http.NewServeMux()
 	srv.Register(mux)
