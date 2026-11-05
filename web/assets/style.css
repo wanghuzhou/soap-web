@@ -143,9 +143,11 @@ body {
   margin: 0;
   border: none;
   tab-size: 2;
-  white-space: pre;
-  word-wrap: normal;
-  overflow-wrap: normal;
+  /* Soft-wrap long lines so nothing is cut off horizontally. Both the editor
+     and the highlight layer MUST wrap identically or they would misalign. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   letter-spacing: 0;
 }
 
@@ -213,7 +215,7 @@ body {
 .resp-body {
   flex: 1; overflow: auto; margin: 0; padding: 14px;
   font-family: var(--mono); font-size: 13px; line-height: 1.6;
-  white-space: pre-wrap; word-break: break-word; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; color: var(--text);
 }
 
 .hidden { display: none !important; }
