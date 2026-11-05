@@ -18,6 +18,10 @@ type Service struct {
 }
 
 // Operation is a single callable operation derived from the WSDL.
+//
+// An operation may carry several saved request samples (SoapUI lets you keep
+// multiple named requests per operation, each with its own parameters). These
+// live in Calls. Request mirrors the first call for convenience.
 type Operation struct {
 	Name       string `json:"name"`
 	SoapAction string `json:"soapAction"`
@@ -25,7 +29,16 @@ type Operation struct {
 	Style      string `json:"style"`     // document / rpc
 	Use        string `json:"use"`       // literal / encoded
 	InputName  string `json:"inputName"` // wrapper element name, if known
-	Request    string `json:"request"`   // generated XML request template
+	Request    string `json:"request"`   // generated or first saved XML template
+	Calls      []Call `json:"calls"`     // saved request samples (with titles)
+}
+
+// Call is a named saved request sample within an operation (a SoapUI <con:call>).
+type Call struct {
+	Title    string `json:"title"` // e.g. "5.6.5 物价查询(药品等)"
+	Endpoint string `json:"endpoint"`
+	Action   string `json:"action"`
+	Request  string `json:"request"` // raw XML body
 }
 
 // TestSuite / TestCase / TestStep mirror SoapUI's hierarchy. A TestStep that

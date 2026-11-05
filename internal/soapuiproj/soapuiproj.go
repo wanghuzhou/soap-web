@@ -45,8 +45,11 @@ type xmlOperation struct {
 	Calls     []xmlCall `xml:"call"`
 }
 
-// xmlCall is <con:call>, which contains the concrete requests.
+// xmlCall is <con:call>, which contains a named saved request.
 type xmlCall struct {
+	Name     string        `xml:"name,attr"`
+	XMLName  xml.Name      `xml:"call"`
+	Endpoint string        `xml:"endpoint"`
 	Requests []xmlNamedReq `xml:"request"`
 }
 
@@ -121,15 +124,32 @@ func Parse(data []byte) (*model.Project, error) {
 				Use:        op.Use,
 				InputName:  op.InputName,
 			}
-			// Take the first saved request as a ready-to-edit template.
-			if len(op.Calls) > 0 && len(op.Calls[0].Requests) > 0 {
-				req := op.Calls[0].Requests[0]
-				o.Request = unescapeXMLText(req.bodyText())
+			// Each <con:call> is a distinct saved request sample. Preserve its
+			// title and its own request body so no parameter set is lost.
+			for _, call := range op.Calls {
+				if len(call.Requests) == 0 {
+					continue
+				}
+				req := call.Requests[0]
+				c := model.Call{
+					Title:    strings.TrimSpace(call.Name),
+					Endpoint: strings.TrimSpace(firstNonEmpty(req.Endpoint, call.Endpoint)),
+					Action:   firstNonEmpty(req.Action, op.Action),
+					Request:  unescapeXMLText(req.bodyText()),
+				}
+				if c.Title == "" {
+					c.Title = op.Name
+				}
+				o.Calls = append(o.Calls, c)
+			}
+			// Use the first call as the operation's default request/endpoint.
+			if len(o.Calls) > 0 {
+				o.Request = o.Calls[0].Request
 				if o.Endpoint == "" {
-					o.Endpoint = strings.TrimSpace(req.Endpoint)
+					o.Endpoint = o.Calls[0].Endpoint
 				}
 				if o.SoapAction == "" {
-					o.SoapAction = req.Action
+					o.SoapAction = o.Calls[0].Action
 				}
 			}
 			if o.Endpoint == "" {
@@ -163,6 +183,16 @@ func Parse(data []byte) (*model.Project, error) {
 // &lt; &amp; etc.) back to real XML. It is idempotent for already-unescaped text.
 func unescapeXMLText(s string) string {
 	return strings.TrimSpace(html.UnescapeString(s))
+}
+
+// firstNonEmpty returns the first non-blank string among its arguments.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // sanitizeXML drops a leading UTF-8 BOM and trims whitespace.

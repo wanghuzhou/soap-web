@@ -75,11 +75,15 @@ function highlightXML(xml) {
 }
 
 /* ---------------- Request fields ---------------- */
-function loadNode(node, kind) {
+function loadNode(node, kind, parentOp) {
   state.selected = { kind, node };
-  $('reqTitle').textContent = (node.name || '') + (kind === 'op' ? '' : '  · 测试步骤');
-  $('endpoint').value = node.endpoint || '';
-  $('soapAction').value = node.soapAction || node.action || '';
+  let title = '';
+  if (kind === 'op') title = node.name || '';
+  else if (kind === 'call') title = (node.title || '请求') + (parentOp ? '  ·  ' + (parentOp.name || '') : '');
+  else title = (node.name || '') + '  · 测试步骤';
+  $('reqTitle').textContent = title;
+  $('endpoint').value = node.endpoint || (parentOp && parentOp.endpoint) || '';
+  $('soapAction').value = node.soapAction || node.action || (parentOp && parentOp.soapAction) || '';
   $('requestBody').value = node.request || '';
   renderTree();
 }
@@ -101,9 +105,15 @@ function renderTree() {
   (p.services || []).forEach((svc) => {
     html += `<div class="tree-group"><div class="tree-node"><span class="ico">▸</span>${escapeHtml(svc.name || 'service')}<span class="tag">service</span></div>`;
     (svc.operations || []).forEach((op, i) => {
-      const sel = state.selected && state.selected.kind === 'op' && state.selected.node === op ? ' selected' : '';
-      html += `<div class="tree-node op${sel}" data-kind="op" data-svc="${esc(svc.name)}" data-idx="${i}">
-        <span class="ico">◇</span>${escapeHtml(op.name || 'operation')}<span class="tag">op</span></div>`;
+      const opSel = state.selected && state.selected.kind === 'op' && state.selected.node === op ? ' selected' : '';
+      html += `<div class="tree-node op${opSel}" data-kind="op" data-svc="${esc(svc.name)}" data-idx="${i}">
+        <span class="ico">◇</span>${escapeHtml(op.name || 'operation')}<span class="tag">${(op.calls && op.calls.length) ? op.calls.length + ' 请求' : 'op'}</span></div>`;
+      // Each saved call is a titled request sample nested under the operation.
+      (op.calls || []).forEach((call, ci) => {
+        const cSel = state.selected && state.selected.kind === 'call' && state.selected.node === call ? ' selected' : '';
+        html += `<div class="tree-node op${cSel}" style="padding-left:32px" data-kind="call" data-svc="${esc(svc.name)}" data-idx="${i}" data-cidx="${ci}">
+          <span class="ico">▸</span><span class="call-title">${escapeHtml(call.title || '请求')}</span></div>`;
+      });
     });
     html += `</div>`;
   });
@@ -127,6 +137,13 @@ function renderTree() {
     elm.addEventListener('click', () => {
       const svc = (state.project.services || []).find((s) => s.name === elm.dataset.svc);
       if (svc && svc.operations) loadNode(svc.operations[+elm.dataset.idx], 'op');
+    });
+  });
+  tree.querySelectorAll('.tree-node[data-kind="call"]').forEach((elm) => {
+    elm.addEventListener('click', () => {
+      const svc = (state.project.services || []).find((s) => s.name === elm.dataset.svc);
+      const op = svc && (svc.operations || [])[+elm.dataset.idx];
+      if (op && op.calls) loadNode(op.calls[+elm.dataset.cidx], 'call', op);
     });
   });
   tree.querySelectorAll('.tree-node[data-kind="step"]').forEach((elm) => {
@@ -237,7 +254,12 @@ async function importSoapUI(file) {
     renderTree();
     // auto-select first operation if any
     const svc = (data.services || [])[0];
-    if (svc && svc.operations && svc.operations[0]) loadNode(svc.operations[0], 'op');
+    if (svc && svc.operations && svc.operations[0]) {
+      const op = svc.operations[0];
+      // Prefer the first saved call (it carries the titled request sample).
+      if (op.calls && op.calls.length) loadNode(op.calls[0], 'call', op);
+      else loadNode(op, 'op');
+    }
     toast('已导入工程：' + (data.name || file.name));
   } catch (e) {
     toast(e.message, true);
