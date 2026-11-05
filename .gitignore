@@ -1,0 +1,8 @@
+﻿# Build artifacts
+*.exe
+/bin/
+/dist/
+
+# OS / editor
+.DS_Store
+Thumbs.db
