@@ -235,8 +235,35 @@
         <div class="field-row">
           <label for="wsdlUrlProxy">代理</label>
           <select id="wsdlUrlProxy">
-            <option value="">系统代理</option>
+            <option value="direct">直连（默认）</option>
+            <option value="system">系统代理</option>
+            <option value="custom">自定义代理</option>
           </select>
+        </div>
+        <div id="wsdlUrlCustom" class="proxy-custom hidden">
+          <div class="field-row">
+            <label for="wsdlUrlProxyType">类型</label>
+            <select id="wsdlUrlProxyType">
+              <option value="http">HTTP 代理</option>
+              <option value="socks5">SOCKS5 代理</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label for="wsdlUrlProxyHost">主机</label>
+            <input id="wsdlUrlProxyHost" type="text" placeholder="127.0.0.1 或 proxy.corp.local" spellcheck="false">
+          </div>
+          <div class="field-row">
+            <label for="wsdlUrlProxyPort">端口</label>
+            <input id="wsdlUrlProxyPort" type="number" min="1" max="65535" placeholder="8080">
+          </div>
+          <div class="field-row">
+            <label for="wsdlUrlProxyUser">用户名</label>
+            <input id="wsdlUrlProxyUser" type="text" placeholder="可留空" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="field-row">
+            <label for="wsdlUrlProxyPass">密码</label>
+            <input id="wsdlUrlProxyPass" type="password" placeholder="可留空" autocomplete="new-password">
+          </div>
         </div>
         <div id="wsdlUrlError" class="modal-error hidden" role="alert"></div>
       </div>

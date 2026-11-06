@@ -13,7 +13,7 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 - **工程重命名 & 导出**：可重命名工程；可导出为 SoapUI 兼容的 `.xml`，方便带回 SoapUI 或分享给同事（导出的工程可再次被本工具导入，结构一致）。
 - **导入 SoapUI 工程**：解析 `.xml` 工程，载入 service / operation / 测试用例步骤及其已保存的请求报文与 endpoint，可一键重发。
 - **WSDL 解析**：解析 WSDL 1.1 + 内嵌 XSD，列出所有 operation，并为每个 operation 自动生成一条结构正确的请求样例（支持嵌套 complexType、extension 继承、choice 降级）。
-- **WSDL URL 导入**：除本地文件外，可直接填写 `http://host/service?wsdl` 由后端抓取并解析，适用于只有内网可达的服务；下载复用工程代理，支持 GBK 等非 UTF-8 编码，并对协议（仅 http/https）、大小（8 MB）与超时（30s）做限制。
+- **WSDL URL 导入**：除本地文件外，可直接填写 `http://host/service?wsdl` 由后端抓取并解析，适用于只有内网可达的服务；下载支持**直连（默认）/ 系统代理 / 自定义 HTTP·SOCKS5 代理**，也可复用已有工程的代理配置；支持 GBK 等非 UTF-8 编码，并对协议（仅 http/https）、大小（8 MB）与超时（30s）做限制。
 - **SOAP 请求发送**：支持 SOAP 1.1（`text/xml` + `SOAPAction`）与 SOAP 1.2（`application/soap+xml` + action）。
 - **请求体编辑**：XML 语法高亮、格式化/压缩、长行自动换行。
 - **响应多视图**：格式化（语法高亮）/ 原始 / Headers，显示状态码、耗时、大小，支持一键复制。
@@ -103,7 +103,7 @@ node web/selftest/tree.selftest.mjs        # 工程树渲染契约回归自测�
 | POST | `/api/send` | 发送 HTTP/SOAP 请求，返回状态、头、体、耗时 |
 | POST | `/api/import/soapui` | 上传 SoapUI 工程 xml，解析并**保存**，返回保存后的工程 |
 | POST | `/api/wsdl/parse` | 上传 WSDL（或 JSON `{url}`）解析并**保存**为新工程，返回 `{service, project}` |
-| POST | `/api/wsdl/fetch` | 从 URL 抓取 WSDL（JSON `{url, projectId?}`，可复用工程代理）并**保存**为新工程 |
+| POST | `/api/wsdl/fetch` | 从 URL 抓取 WSDL（JSON `{url, proxy?, projectId?}`，默认直连，可指定代理或复用工程代理）并**保存**为新工程 |
 | GET | `/api/projects` | 列出所有已保存工程 |
 | POST | `/api/projects` | 新建工程 |
 | GET/PUT/DELETE | `/api/projects/{pid}` | 获取 / 整体更新（含重命名）/ 删除工程 |

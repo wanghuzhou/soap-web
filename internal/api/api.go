@@ -236,6 +236,10 @@ func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
 // fetchWSDLRequest is the payload for POST /api/wsdl/fetch.
 type fetchWSDLRequest struct {
 	URL string `json:"url"`
+	// Proxy overrides the download's proxy settings. When omitted, the server
+	// defaults to a direct connection (the URL import dialog's default), unless
+	// ProjectID names a project whose proxy should be reused.
+	Proxy *model.ProxySettings `json:"proxy"`
 	// ProjectID is optional. When set, that project's proxy configuration is
 	// used for the download, which lets an intranet WSDL be reached through the
 	// same proxy as the services the project debugs.
@@ -251,10 +255,26 @@ func (s *Server) handleFetchWSDL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var proxyCfg *model.ProxySettings
-	if req.ProjectID != "" {
+	switch {
+	case req.Proxy != nil:
+		if err := req.Proxy.Validate(); err != nil {
+			writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
+			return
+		}
+		proxyCfg = req.Proxy
+	case req.ProjectID != "":
 		if p, err := s.Store.Get(req.ProjectID); err == nil {
 			proxyCfg = p.Proxy
+			if proxyCfg == nil {
+				// A project without explicit settings means "system proxy".
+				proxyCfg = &model.ProxySettings{Mode: "system"}
+			}
 		}
+	}
+	if proxyCfg == nil {
+		// URL imports default to a direct connection; an unreachable/missing
+		// project should not silently fall back to an unrelated system proxy.
+		proxyCfg = &model.ProxySettings{Mode: "direct"}
 	}
 
 	fetched, err := wsdlfetch.Fetch(req.URL, proxyCfg)

@@ -232,6 +232,43 @@ func TestFetchWSDLUsesProjectProxy(t *testing.T) {
 	}
 }
 
+// TestFetchWSDLExplicitCustomProxy verifies the dialog's custom proxy option:
+// the request carries proxy settings directly instead of a project id.
+func TestFetchWSDLExplicitCustomProxy(t *testing.T) {
+	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(remoteWSDLForURLImport))
+	}))
+	defer proxySrv.Close()
+
+	mux, _ := newWSDLImportTestServer(t)
+	pu, err := url.Parse(proxySrv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := postWSDLImportJSON(t, mux, "/api/wsdl/fetch", map[string]any{
+		"url": "http://target.invalid/svc.wsdl",
+		"proxy": map[string]any{
+			"mode": "custom", "type": "http",
+			"host": pu.Hostname(), "port": portOf(pu),
+		},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestFetchWSDLRejectsInvalidProxy validates proxy settings before fetching.
+func TestFetchWSDLRejectsInvalidProxy(t *testing.T) {
+	mux, _ := newWSDLImportTestServer(t)
+	rec := postWSDLImportJSON(t, mux, "/api/wsdl/fetch", map[string]any{
+		"url":   "http://target.invalid/svc.wsdl",
+		"proxy": map[string]any{"mode": "custom", "type": "http", "host": "", "port": 0},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body=%s)", rec.Code, rec.Body.String())
+	}
+}
+
 // TestParseWSDLFileStillWorks guards the upload path against the refactor.
 func TestParseWSDLFileStillWorks(t *testing.T) {
 	mux, _ := newWSDLImportTestServer(t)

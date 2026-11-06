@@ -2,8 +2,8 @@
 //
 // Lets the user import a WSDL by URL instead of downloading it first, which
 // matters for intranet services that are only reachable from the machine
-// running soap-web. The fetch happens server-side so the selected project's
-// proxy settings apply (the browser would bypass them).
+// running soap-web. The fetch happens server-side so the selected proxy
+// settings apply (the browser would bypass them).
 
 import { $ } from './dom.js';
 import { apiJSON } from './api.js';
@@ -24,6 +24,7 @@ export function initWsdlUrl({ reload, onImported: imported } = {}) {
   $('wsdlUrlClose').addEventListener('click', closeWsdlUrlDialog);
   $('wsdlUrlCancel').addEventListener('click', closeWsdlUrlDialog);
   $('wsdlUrlImport').addEventListener('click', submitWsdlUrl);
+  $('wsdlUrlProxy').addEventListener('change', updateProxyCustomVisibility);
   $('wsdlUrlOverlay').addEventListener('click', (event) => {
     if (event.target === $('wsdlUrlOverlay')) closeWsdlUrlDialog();
   });
@@ -60,19 +61,71 @@ function closeWsdlUrlDialog() {
   if (back && back.focus) back.focus();
 }
 
-// populateProxyOptions lets the user borrow an existing project's proxy for
-// the download. Empty value means "system proxy".
+// populateProxyOptions fills the proxy dropdown. Direct connection is the
+// default; system/custom cover the other local cases, and existing projects are
+// offered as a shortcut to reuse their already-configured proxy.
 function populateProxyOptions() {
   const select = $('wsdlUrlProxy');
-  const current = select.value;
-  select.innerHTML = '<option value="">系统代理</option>';
-  (state.projects || []).forEach((project) => {
-    const option = document.createElement('option');
-    option.value = project.id;
-    option.textContent = '使用「' + (project.name || '未命名工程') + '」的代理（' + proxyLabel(project.proxy) + '）';
-    select.appendChild(option);
-  });
-  if (current) select.value = current;
+  select.innerHTML = [
+    '<option value="direct">直连（默认）</option>',
+    '<option value="system">系统代理</option>',
+    '<option value="custom">自定义代理</option>',
+  ].join('');
+
+  const projects = state.projects || [];
+  if (projects.length) {
+    const group = document.createElement('optgroup');
+    group.label = '使用已有工程代理';
+    projects.forEach((project) => {
+      const option = document.createElement('option');
+      option.value = 'project:' + project.id;
+      option.textContent = '「' + (project.name || '未命名工程') + '」（' + proxyLabel(project.proxy) + '）';
+      group.appendChild(option);
+    });
+    select.appendChild(group);
+  }
+
+  select.value = 'direct';
+  $('wsdlUrlProxyType').value = 'http';
+  $('wsdlUrlProxyHost').value = '';
+  $('wsdlUrlProxyPort').value = '';
+  $('wsdlUrlProxyUser').value = '';
+  $('wsdlUrlProxyPass').value = '';
+  updateProxyCustomVisibility();
+}
+
+function updateProxyCustomVisibility() {
+  $('wsdlUrlCustom').classList.toggle('hidden', $('wsdlUrlProxy').value !== 'custom');
+}
+
+// readProxySelection maps the dropdown selection to the JSON fields the API
+// expects: direct/system/custom send a proxy object, project:<id> sends the
+// project id so the server reuses that project's settings.
+function readProxySelection() {
+  const value = $('wsdlUrlProxy').value;
+  if (value === 'direct' || value === 'system') {
+    return { proxy: { mode: value } };
+  }
+  if (value === 'custom') {
+    const host = $('wsdlUrlProxyHost').value.trim();
+    const port = parseInt($('wsdlUrlProxyPort').value, 10) || 0;
+    if (!host) return { error: '请填写代理主机地址', focus: 'wsdlUrlProxyHost' };
+    if (!port) return { error: '请填写代理端口', focus: 'wsdlUrlProxyPort' };
+    return {
+      proxy: {
+        mode: 'custom',
+        type: $('wsdlUrlProxyType').value,
+        host,
+        port,
+        username: $('wsdlUrlProxyUser').value,
+        password: $('wsdlUrlProxyPass').value,
+      },
+    };
+  }
+  if (value.startsWith('project:')) {
+    return { projectId: value.slice('project:'.length) };
+  }
+  return { proxy: { mode: 'direct' } };
 }
 
 function showError(message) {
@@ -129,9 +182,16 @@ async function submitWsdlUrl() {
   $('wsdlUrlOverlay').setAttribute('aria-busy', 'true');
 
   try {
+    const selection = readProxySelection();
+    if (selection.error) {
+      showError(selection.error);
+      if (selection.focus) $(selection.focus).focus();
+      return;
+    }
+
     const payload = { url: checked.url };
-    const proxyId = $('wsdlUrlProxy').value;
-    if (proxyId) payload.projectId = proxyId;
+    if (selection.proxy) payload.proxy = selection.proxy;
+    if (selection.projectId) payload.projectId = selection.projectId;
 
     // The server allows itself 30s for the download; the client waits a little
     // longer so a slow-but-successful import is not reported as a timeout.
