@@ -70,7 +70,7 @@
         </div>
       </aside>
 
-      <div class="resizer" id="resizerLeft" title="拖动调整宽度，双击复位" role="separator" aria-orientation="vertical"></div>
+      <div class="resizer" id="resizerLeft" tabindex="0" role="separator" aria-orientation="vertical" aria-label="调整工程树宽度" aria-valuemin="200" aria-valuenow="272" title="拖动调整宽度；双击或 Home 复位；方向键微调"></div>
 
       <!-- Center: request editor -->
       <section class="editor-pane" id="paneMid" aria-label="请求编辑">
@@ -108,7 +108,7 @@
             <button id="btnFormat" class="tool-btn" title="美化 XML 缩进 (Ctrl+Shift+F)">格式化</button>
             <button id="btnMinify" class="tool-btn" title="压缩为单行">压缩</button>
             <span class="toolbar-sep" aria-hidden="true"></span>
-            <label class="check-label"><input id="autoFormat" type="checkbox" checked> 载入时自动格式化</label>
+            <label class="check-label"><input id="autoFormat" type="checkbox"> 载入时自动格式化</label>
           </div>
         </div>
 
@@ -126,7 +126,7 @@
         </div>
       </section>
 
-      <div class="resizer" id="resizerRight" title="拖动调整宽度，双击复位" role="separator" aria-orientation="vertical"></div>
+      <div class="resizer" id="resizerRight" tabindex="0" role="separator" aria-orientation="vertical" aria-label="调整响应面板宽度" aria-valuemin="340" title="拖动调整宽度；双击或 Home 复位；方向键微调"></div>
 
       <!-- Right: response -->
       <section class="response-pane" id="paneRight" aria-label="响应">

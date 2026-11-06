@@ -60,21 +60,39 @@ export function renderResponse() {
   status.textContent = (response.status || 0) + (response.statusText ? ' ' + response.statusText : '');
   status.className = 'status-pill ' + (response.status >= 200 && response.status < 300 ? 'ok' : response.status >= 400 ? 'err' : 'warn');
   $('respTime').textContent = response.durationMs != null ? response.durationMs + ' ms' : '';
-  $('respSize').textContent = formatSize(response.size);
+  $('respSize').textContent = formatSize(response.size) + (response.truncated ? '（已截断）' : '');
   summary.textContent = response.status ? 'HTTP ' + response.status : '';
 
   if (state.view === 'raw') {
     body.textContent = response.body || '';
   } else if (state.view === 'headers') {
-    body.textContent = Object.entries(response.headers || {})
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([key, value]) => key + ': ' + value)
-      .join('\n');
+    body.textContent = headersToText(response.headers);
   } else {
-    const pretty = prettyXML(response.body || '');
-    body.innerHTML = highlightXML(pretty);
+    body.innerHTML = prettyHtml(response);
   }
   body.scrollTop = 0;
+}
+
+// prettyHtml lazily computes and caches the highlighted HTML for a response.
+//
+// Switching between the "格式化" and "原始" tabs used to re-run prettyXML plus
+// highlightXML over the whole body every time. For a few hundred KB of XML that
+// is tens of milliseconds per click, and it also re-triggered the old
+// backtracking regex. The cache lives on the response object, so it is
+// discarded automatically when state.response is replaced.
+function prettyHtml(response) {
+  if (response._prettyHtml == null) {
+    response._prettyHtml = highlightXML(prettyXML(response.body || ''));
+  }
+  return response._prettyHtml;
+}
+
+// headersToText renders the header map as "Name: value" lines, sorted.
+function headersToText(headers) {
+  return Object.entries(headers || {})
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([key, value]) => key + ': ' + value)
+    .join('\n');
 }
 
 async function copyResponse() {
@@ -82,23 +100,27 @@ async function copyResponse() {
     toast('暂无响应可复制', true);
     return;
   }
-  const text = $('respBody').innerText;
+  // Copy from the source string, not from the rendered DOM: innerText forces a
+  // full synchronous layout (slow on a large highlighted <pre>) and, in the
+  // pretty view, would copy re-formatted text instead of the real bytes.
+  const text = state.view === 'headers'
+    ? headersToText(state.response.headers)
+    : (state.response.body || '');
   try {
     await navigator.clipboard.writeText(text);
     toast('响应已复制');
   } catch (error) {
+    // execCommand returns false on failure instead of throwing, so check it.
     const helper = document.createElement('textarea');
     helper.value = text;
     helper.style.position = 'fixed';
     helper.style.opacity = '0';
     document.body.appendChild(helper);
     helper.select();
-    try {
-      document.execCommand('copy');
-      toast('响应已复制');
-    } catch (e) {
-      toast('复制失败，请手动选择文本', true);
-    }
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
     helper.remove();
+    if (ok) toast('响应已复制');
+    else toast('复制失败，请手动选择文本', true);
   }
 }

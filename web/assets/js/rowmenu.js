@@ -138,6 +138,4 @@ export function openRowMenu({ anchor, items, onSelect }) {
   if (first) first.focus();
 }
 
-export function isRowMenuOpenFor(anchor) {
-  return !!current && current.anchor === anchor;
-}
+

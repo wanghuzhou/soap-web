@@ -5,7 +5,9 @@ import { state } from './state.js';
 import { apiJSON, apiSend } from './api.js';
 import { toast } from './toast.js';
 import { prettyXML, minifyXML, normalizeNewlines, highlightXML } from './xml.js';
-import { renderTree } from './tree.js';
+import { syncSelection } from './tree.js';
+import { STORAGE_KEY } from './constants.js';
+import { isRenaming } from './inlineedit.js';
 import { renderResponse } from './response.js';
 
 let reloadHandler = async () => {};
@@ -54,7 +56,7 @@ export function initEditor({ reload }) {
     const modalOpen = !$('proxyOverlay').classList.contains('hidden');
     // While a tree row is being renamed inline, global shortcuts must not fire
     // (the editor also stops its own keydown from bubbling, this is a guard).
-    if (modalOpen || document.querySelector('.rename-input')) return;
+    if (modalOpen || isRenaming()) return;
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
       send();
@@ -65,8 +67,24 @@ export function initEditor({ reload }) {
     }
   });
 
+  initAutoFormat();
   updateEditButtons();
   renderHighlight();
+}
+
+// initAutoFormat restores the persisted preference and keeps it in sync.
+// Defaulting to off matters: auto-formatting rewrites the payload as it loads,
+// so the user should opt in rather than discover their XML was reformatted.
+function initAutoFormat() {
+  const box = $('autoFormat');
+  if (!box) return;
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY.AUTO_FORMAT);
+    box.checked = saved === '1';
+  } catch (e) { /* storage may be unavailable */ }
+  box.addEventListener('change', () => {
+    try { localStorage.setItem(STORAGE_KEY.AUTO_FORMAT, box.checked ? '1' : '0'); } catch (e) { /* ignore */ }
+  });
 }
 
 function renderHighlight() {
@@ -154,7 +172,7 @@ export function loadNode(node, kind, path = {}) {
     setRequestBody('', false);
     updateReqBadge();
     updateEditButtons();
-    renderTree();
+    syncSelection();
     return;
   }
 
@@ -167,11 +185,11 @@ export function loadNode(node, kind, path = {}) {
   $('reqTitle').textContent = title;
   $('endpoint').value = node.endpoint || (parentOperation && parentOperation.endpoint) || '';
   $('soapAction').value = node.action || node.soapAction || (parentOperation && parentOperation.soapAction) || '';
-  const autoFormat = $('autoFormat') ? $('autoFormat').checked : true;
+  const autoFormat = $('autoFormat') ? $('autoFormat').checked : false;
   setRequestBody(node.request || '', autoFormat);
   updateReqBadge();
   updateEditButtons();
-  renderTree();
+  syncSelection();
 }
 
 export function updateEditButtons() {

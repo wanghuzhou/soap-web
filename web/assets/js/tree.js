@@ -3,7 +3,7 @@
 import { $, escapeHtml, escapeAttr } from './dom.js';
 import { apiJSON } from './api.js';
 import { toast } from './toast.js';
-import { state, findProject, findService, findOperation, findCall, toggleCollapsed } from './state.js';
+import { state, findProject, findService, findOperation, findCall, toggleCollapsed, pruneCollapsed } from './state.js';
 import { openProxyDialog, proxyLabel } from './proxy.js';
 import { openRowMenu } from './rowmenu.js';
 import { startInlineRename, cancelActiveRename } from './inlineedit.js';
@@ -15,7 +15,124 @@ let handlers = {
 
 export function initTree(options) {
   handlers = { ...handlers, ...options };
-  $('tree').addEventListener('click', handleTreeClick);
+  const tree = $('tree');
+  tree.addEventListener('click', handleTreeClick);
+  tree.addEventListener('keydown', handleTreeKeydown);
+  tree.addEventListener('focusin', handleTreeFocusIn);
+}
+
+// handleTreeFocusIn makes the focused row the roving tab stop, so Tab-ing away
+// and back returns to where the user was.
+function handleTreeFocusIn(event) {
+  const row = event.target.closest('.tree-node');
+  if (!row) return;
+  const tree = $('tree');
+  tree.querySelectorAll('.tree-node').forEach((r) => { r.tabIndex = -1; });
+  row.tabIndex = 0;
+}
+
+// handleTreeKeydown implements the standard ARIA tree keyboard model:
+//   Up/Down   move between visible rows
+//   Right     expand, or move into the first child
+//   Left      collapse, or move to the parent
+//   Enter/Space select the row
+//   F2        rename (calls only)
+function handleTreeKeydown(event) {
+  const row = event.target.closest('.tree-node');
+  if (!row) return;
+  const tree = $('tree');
+  const rows = Array.from(tree.querySelectorAll('.tree-node'));
+  const index = rows.indexOf(row);
+  if (index < 0) return;
+
+  const move = (target) => {
+    if (!target) return;
+    event.preventDefault();
+    rows.forEach((r) => { r.tabIndex = -1; });
+    target.tabIndex = 0;
+    target.focus();
+  };
+
+  switch (event.key) {
+    case 'ArrowDown':
+      move(rows[index + 1]);
+      return;
+    case 'ArrowUp':
+      move(rows[index - 1]);
+      return;
+    case 'Home':
+      move(rows[0]);
+      return;
+    case 'End':
+      move(rows[rows.length - 1]);
+      return;
+    case 'ArrowRight': {
+      event.preventDefault();
+      const key = toggleKeyOf(row);
+      if (key && isCollapsed(key)) {
+        toggleCollapsed(key);
+        renderTree();
+        refocusRow(row);
+        return;
+      }
+      const next = rows[index + 1];
+      // Only descend when the next row is actually a child (deeper).
+      if (next && depthOf(next) > depthOf(row)) move(next);
+      return;
+    }
+    case 'ArrowLeft': {
+      event.preventDefault();
+      const key = toggleKeyOf(row);
+      if (key && !isCollapsed(key)) {
+        toggleCollapsed(key);
+        renderTree();
+        refocusRow(row);
+        return;
+      }
+      // Move to the nearest preceding row with a shallower depth (its parent).
+      for (let i = index - 1; i >= 0; i--) {
+        if (depthOf(rows[i]) < depthOf(row)) { move(rows[i]); return; }
+      }
+      return;
+    }
+    case 'Enter':
+    case ' ':
+      event.preventDefault();
+      selectRow(row);
+      return;
+    case 'F2':
+      if (row.dataset.kind === 'call') {
+        event.preventDefault();
+        handleTreeAction({ act: 'rename-call', ...row.dataset });
+      }
+      return;
+    default:
+  }
+}
+
+// toggleKeyOf returns the collapse key of a row, or '' when it is a leaf.
+function toggleKeyOf(row) {
+  const caret = row.querySelector('.caret[data-toggle]');
+  return caret ? caret.dataset.toggle : '';
+}
+
+function depthOf(row) {
+  return Number(row.style.getPropertyValue('--depth')) || 0;
+}
+
+// refocusRow re-establishes focus after renderTree() rebuilt the rows.
+function refocusRow(staleRow) {
+  const tree = $('tree');
+  const kind = staleRow.dataset.kind;
+  const keys = ['pid', 'sid', 'oid', 'cid'].filter((k) => staleRow.dataset[k]);
+  let selector = '.tree-node';
+  keys.forEach((k) => { selector += `[data-${k}="${staleRow.dataset[k]}"]`; });
+  const fresh = tree.querySelector(selector) || tree.querySelector(`.tree-node[data-kind="${kind}"]`);
+  if (fresh) {
+    tree.querySelectorAll('.tree-node').forEach((r) => { r.tabIndex = -1; });
+    fresh.tabIndex = 0;
+    fresh.focus();
+  }
 }
 
 function isCollapsed(key) {
@@ -32,7 +149,12 @@ function rowHtml({ kind, depth, attrs, label, tags = '', actions = '', toggleKey
   const attrHtml = Object.entries(attrs)
     .map(([name, value]) => ` data-${name}="${escapeAttr(value)}"`)
     .join('');
-  return `<div class="tree-node ${kind}${selected ? ' selected' : ''}" style="--depth:${depth}" data-kind="${kind}" role="treeitem" aria-selected="${selected ? 'true' : 'false'}"${attrHtml}>
+  // Roving tabindex: exactly one row is in the tab order (the selected one,
+  // or the first row when nothing is selected). Without this, role="treeitem"
+  // rows were not focusable at all, so keyboard users could never select a
+  // request sample — only click it.
+  const expanded = leaf ? '' : ` aria-expanded="${isCollapsed(toggleKey) ? 'false' : 'true'}"`;
+  return `<div class="tree-node ${kind}${selected ? ' selected' : ''}" style="--depth:${depth}" data-kind="${kind}" role="treeitem" aria-level="${depth + 1}" aria-selected="${selected ? 'true' : 'false'}" tabindex="-1"${expanded}${attrHtml}>
     ${caretHtml(toggleKey, leaf)}
     <span class="lbl" title="${escapeAttr(label)}">${escapeHtml(label)}</span>
     ${tags}
@@ -67,7 +189,7 @@ export function renderTree() {
       <button class="mini more" title="更多操作" aria-haspopup="menu" aria-expanded="false"
               data-more="proj" data-pid="${escapeAttr(project.id)}">⋯</button>`;
 
-    html += '<div class="tree-group">';
+    html += '<div class="tree-group" role="group">';
     html += rowHtml({
       kind: 'proj',
       depth: 0,
@@ -150,6 +272,33 @@ export function renderTree() {
   });
 
   tree.innerHTML = html;
+  pruneCollapsed(collectKeys(projects));
+  syncTabStop();
+}
+
+// collectKeys returns every id that may still be collapsed, so orphaned keys
+// (from deleted nodes or a re-import that assigned new ids) can be reclaimed.
+function collectKeys(projects) {
+  const keys = new Set();
+  projects.forEach((project) => {
+    keys.add(project.id);
+    (project.services || []).forEach((service) => {
+      keys.add(service.id);
+      (service.operations || []).forEach((operation) => keys.add(operation.id));
+    });
+  });
+  return keys;
+}
+
+// syncTabStop keeps exactly one row reachable with Tab (roving tabindex).
+function syncTabStop() {
+  const tree = $('tree');
+  if (!tree) return;
+  const rows = tree.querySelectorAll('.tree-node');
+  if (!rows.length) return;
+  const active = tree.querySelector('.tree-node.selected') || rows[0];
+  rows.forEach((row) => { row.tabIndex = -1; });
+  active.tabIndex = 0;
 }
 
 function handleTreeClick(event) {
@@ -180,6 +329,11 @@ function handleTreeClick(event) {
 
   const row = event.target.closest('.tree-node');
   if (!row) return;
+  selectRow(row);
+}
+
+// selectRow dispatches selection for a tree row. Shared by mouse and keyboard.
+function selectRow(row) {
   const data = row.dataset;
 
   if (data.kind === 'proj') {
@@ -199,6 +353,32 @@ function handleTreeClick(event) {
     const found = findCall(ids);
     if (found) handlers.onSelect(found.call, 'call', { ids, parentOp: found.operation });
   }
+}
+
+// syncSelection moves the .selected marker without rebuilding the tree.
+//
+// renderTree() used to be called at the end of every loadNode(), which re-parsed
+// the whole tree (roughly 80 KB of HTML for 200 nodes) just to move one class.
+// It also destroyed the button the user had just clicked, dropping focus to
+// <body> and breaking :focus-within, so the row's inline actions vanished.
+export function syncSelection() {
+  const tree = $('tree');
+  if (!tree) return;
+  const selected = state.selected;
+  const ids = (selected && selected.ids) || {};
+  const kind = selected ? selected.kind : '';
+
+  const rows = tree.querySelectorAll('.tree-node');
+  rows.forEach((row) => {
+    const match = kind && row.dataset.kind === kind
+      && (!ids.pid || row.dataset.pid === ids.pid)
+      && (!ids.sid || row.dataset.sid === ids.sid)
+      && (!ids.oid || row.dataset.oid === ids.oid)
+      && (!ids.cid || row.dataset.cid === ids.cid);
+    row.classList.toggle('selected', !!match);
+    row.setAttribute('aria-selected', match ? 'true' : 'false');
+  });
+  syncTabStop();
 }
 
 // Project row "⋯" menu. Items carry the same dataset shape as the old inline

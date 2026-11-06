@@ -14,8 +14,11 @@
 
 let active = null;
 
+// isRenaming reports whether an in-place rename is in progress.
+// Uses the authoritative module state instead of querying the DOM: the previous
+// implementation ran a document-wide querySelector on every keystroke.
 export function isRenaming() {
-  return !!document.querySelector('.rename-input');
+  return !!active;
 }
 
 // cancelActiveRename is called before the tree is rebuilt so a stale editor
