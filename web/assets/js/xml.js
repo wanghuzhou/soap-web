@@ -8,63 +8,143 @@ export function escapeHtml(value) {
     .replace(/>/g, '&gt;');
 }
 
-// Pretty-print XML with indentation. CDATA and comments keep their inner
-// content untouched (whitespace inside CDATA is significant and must not be
-// reflowed). Returns input unchanged if it does not look like XML.
+// MAX_INDENT_DEPTH caps indentation growth. Indent cost is O(depth) per line,
+// so a pathologically deep (or truncated) payload would otherwise expand to tens
+// of megabytes of whitespace that then gets pushed into innerHTML. Real SOAP
+// documents rarely exceed ~20 levels; beyond this we simply stop indenting.
+const MAX_INDENT_DEPTH = 64;
+
+// Pretty-print XML with indentation.
+//
+// Whitespace is significant in XML text content: a value such as "  abc  ", a
+// preserved blank line, or the leading newline of a multi-line base64 payload
+// must survive verbatim. Re-indenting an element that carries text would
+// silently rewrite the payload, and the editor persists what it shows, so the
+// damage would be permanent.
+//
+// Therefore this only reflows where reflowing is provably safe:
+//   * element-only content (children, no significant text) -> re-indented;
+//   * an element whose content contains significant text (text-only or mixed)
+//     -> emitted verbatim, byte for byte;
+//   * CDATA / comments / processing instructions keep their inner content.
+// Pure inter-element indentation (whitespace containing a newline) is dropped,
+// because it carries no meaning in an element-only content model.
+//
+// Returns input unchanged if it does not look like XML.
 export function prettyXML(xml) {
   const text = xml == null ? '' : xml;
   if (!text.trim() || text.trim()[0] !== '<') return text;
 
   // Tokenise into CDATA, comments, PIs, opening/closing/self-closing tags, text.
+  // `index` is kept so verbatim runs can be sliced from the original source.
   const re = /<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/?[^>]+>|[^<]+/g;
   const tokens = [];
   let match;
-  while ((match = re.exec(text)) !== null) tokens.push(match[0]);
+  while ((match = re.exec(text)) !== null) {
+    tokens.push({ raw: match[0], index: match.index, kind: classifyToken(match[0]) });
+  }
+
+  // Pair every opening tag with its closing tag, so we can tell in O(n) whether
+  // a given element's content contains text (and thus must stay verbatim).
+  const closeOf = new Array(tokens.length).fill(-1);
+  {
+    const stack = [];
+    for (let i = 0; i < tokens.length; i++) {
+      if (tokens[i].kind === 'open') stack.push(i);
+      else if (tokens[i].kind === 'close' && stack.length) closeOf[stack.pop()] = i;
+    }
+  }
 
   let out = '';
   let pad = 0;
-  const padStr = () => '  '.repeat(pad);
+  const padStr = () => (pad > MAX_INDENT_DEPTH ? '' : '  '.repeat(pad));
 
   for (let i = 0; i < tokens.length; i++) {
-    const raw = tokens[i];
-    const token = raw.trim();
-    if (token === '') continue;
+    const { raw, index, kind } = tokens[i];
 
-    const isCdata = token.startsWith('<![CDATA[');
-    const isComment = token.startsWith('<!--');
-    const isPI = token.startsWith('<?');
-    const isClose = /^<\//.test(token);
-    const isSelf = /^<[^>]+\/>$/.test(token);
-    const isOpen = /^<[^>]+>$/.test(token) && !isClose && !isSelf;
+    // Pure indentation between elements: insignificant, drop it.
+    if (kind === 'text' && isIndentOnly(raw)) continue;
 
-    if (isCdata || isComment || isPI) {
-      out += padStr() + token + '\n';
-    } else if (isClose) {
+    if (kind === 'close') {
       pad = Math.max(0, pad - 1);
-      out += padStr() + token + '\n';
-    } else if (isSelf) {
-      out += padStr() + token + '\n';
-    } else if (isOpen) {
-      // Keep simple text-only elements on one line: <tag>value</tag>.
-      let j = i + 1;
-      while (j < tokens.length && tokens[j].trim() === '') j++;
-      const next = j < tokens.length ? tokens[j] : '';
-      const nextIsText = next !== '' && !next.trim().startsWith('<');
-      if (nextIsText) {
-        let k = j + 1;
-        while (k < tokens.length && tokens[k].trim() === '') k++;
-        const close = k < tokens.length ? tokens[k].trim() : '';
-        out += padStr() + token + next.trim() + close + '\n';
-        i = k; // consume text + closing tag
-      } else {
-        out += padStr() + token + '\n';
-        pad++;
-      }
-    } else {
-      out += padStr() + token + '\n';
+      out += padStr() + raw.trim() + '\n';
+      continue;
     }
+
+    if (kind === 'open') {
+      const close = closeOf[i];
+      if (close < 0) {
+        // Unbalanced markup (truncated payload). Emit as-is, do not guess.
+        out += padStr() + raw + '\n';
+        continue;
+      }
+      if (contentHasText(tokens, i + 1, close)) {
+        // Text content is significant: preserve the whole element verbatim.
+        const start = index;
+        const end = tokens[close].index + tokens[close].raw.length;
+        out += padStr() + text.slice(start, end) + '\n';
+        i = close;
+        continue;
+      }
+      if (close === i + 1) {
+        // Empty element: <a></a> stays on one line.
+        out += padStr() + raw.trim() + tokens[close].raw.trim() + '\n';
+        i = close;
+        continue;
+      }
+      out += padStr() + raw.trim() + '\n';
+      pad++;
+      continue;
+    }
+
+    // self / cdata / comment / pi / stray text
+    out += padStr() + raw.trim() + '\n';
   }
   return out.replace(/\n$/, '');
+}
+
+// classifyToken tags a token from prettyXML's tokenizer.
+function classifyToken(token) {
+  if (token.startsWith('<![CDATA[')) return 'cdata';
+  if (token.startsWith('<!--')) return 'comment';
+  if (token.startsWith('<?')) return 'pi';
+  if (/^<\//.test(token)) return 'close';
+  if (/^<[^>]+\/>$/.test(token)) return 'self';
+  if (/^<[^>]+>$/.test(token)) return 'open';
+  if (token.startsWith('<')) return 'other';
+  return 'text';
+}
+
+// isIndentOnly reports whether a text token is nothing but formatting
+// whitespace (it must contain a newline; "  " inside <a>  </a> may be content).
+function isIndentOnly(raw) {
+  return /^[ \t\r\n]*$/.test(raw) && raw.indexOf('\n') >= 0;
+}
+
+// contentHasText reports whether the *direct* content of an element is
+// significant, i.e. whether re-indenting it would alter the payload.
+//
+// Descendant text does not count: <a><b>1</b></a> is element-only content and
+// can be reflowed freely. Only text that sits directly inside the element
+// matters, so the scan tracks nesting depth.
+//
+// CDATA is treated as significant too: it normally carries real data (base64,
+// embedded XML, SQL) and injecting indentation around it changes the content
+// model of the element.
+function contentHasText(tokens, from, to) {
+  let depth = 0;
+  for (let i = from; i < to; i++) {
+    const { raw, kind } = tokens[i];
+    if (kind === 'open') {
+      depth++;
+    } else if (kind === 'close') {
+      depth = Math.max(0, depth - 1);
+    } else if (depth === 0) {
+      if (kind === 'cdata') return true;
+      if (kind === 'text' && !isIndentOnly(raw)) return true;
+    }
+  }
+  return false;
 }
 
 // Minify XML: strip whitespace between tags while preserving CDATA/comments.
@@ -94,12 +174,18 @@ export function highlightXML(xml) {
 }
 
 // SoapUI stores line breaks in some projects as the literal two-character
-// sequence "\r" / "\n" followed by a newline. Normalise these to real newlines
-// so the editor shows clean, readable XML instead of stray "\r" tokens.
+// sequence "\r" / "\n" *followed by a real newline*. Normalise only that exact
+// shape: the trailing newline is what makes it an artifact rather than content.
+//
+// Do NOT widen this to a bare /\\(r|n)/ replace. A lone backslash-n inside a
+// payload is ordinary data (Windows paths such as C:\new\reports, JSON strings,
+// regexes, base64) and rewriting it silently corrupts the request body, which
+// the editor then persists on save.
 export function normalizeNewlines(value) {
   let s = value == null ? '' : String(value);
-  s = s.replace(/\\(r|n)(\\r|\\n)?[ \t]*\r?\n/g, '\n');
-  s = s.replace(/\\(r|n)(\\r|\\n)?/g, '\n');
+  // Collapse literal "\r"/"\n" markers that sit at the end of a real line.
+  s = s.replace(/(?:\\r|\\n)+[ \t]*\r?\n/g, '\n');
+  // Finally normalise genuine CRLF / CR to LF.
   s = s.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
   return s;
 }
