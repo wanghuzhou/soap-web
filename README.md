@@ -18,6 +18,7 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 - **响应多视图**：格式化（语法高亮）/ 原始 / Headers，显示状态码、耗时、大小，支持一键复制。
 - **非 UTF-8 编码支持**：GBK / GB2312 / GB18030 / Big5 的响应体与 WSDL、SoapUI 工程均可正确解码（国内老 SOAP 服务常见）。响应体大小上限 16 MB，超出会标记「已截断」。
 - **报文保真**：格式化与换行规整不会改写文本内容——`<Token>  abc  </Token>` 的前后空格、`xml:space="preserve"`、多行 base64、含 `\n` 的 JSON/正则/Windows 路径都会原样保留。
+- **并发安全**：工程读写返回值均为深拷贝，写操作走「克隆 → 落盘 → 换入」，磁盘失败时内存状态不变；改代理走窄接口，不会用旧快照覆盖其他标签页的改动。发送带请求令牌，切换请求样例后迟到的响应会被丢弃，并支持中途取消。
 - **界面优化**：支持白天/夜间主题切换（跟随系统，记忆选择）；左中右三栏可拖动调整宽度（记忆宽度，窗口缩放自动收敛）；窄屏自动切换为请求/响应上下堆叠；长标题自动省略不撑高行；顶栏「本地服务状态」每 10 秒探活 `/api/health`，后端停止后自动变红提示“已断开”，点击可立即重试。
 - **可维护前端**：前端按职责拆分为 ES Modules（state / api / xml / tree / editor / response / proxy / theme / layout），无构建步骤、无外部依赖，仍随 Go 二进制内嵌分发。
 
@@ -98,6 +99,7 @@ node web/selftest/xml.selftest.mjs         # 前端 XML 管线回归自测（需
 | GET | `/api/projects` | 列出所有已保存工程 |
 | POST | `/api/projects` | 新建工程 |
 | GET/PUT/DELETE | `/api/projects/{pid}` | 获取 / 整体更新（含重命名）/ 删除工程 |
+| PUT | `/api/projects/{pid}/proxy` | 仅更新工程代理设置（避免整体覆盖并发修改） |
 | GET | `/api/projects/{pid}/export` | 导出为 SoapUI 兼容 XML（下载） |
 | POST | `/api/projects/{pid}/services` | 新建服务 |
 | DELETE | `/api/projects/{pid}/services/{sid}` | 删除服务 |
