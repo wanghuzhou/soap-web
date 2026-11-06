@@ -158,19 +158,32 @@ func Parse(data []byte) (*Result, error) {
 			if len(bo.Input) > 0 {
 				op.Use = bo.Input[0].Body.Use
 			}
-			// Find the input message to know the root element.
+			// Find the input message to know the request structure.
 			var rootElem string
+			var parts []wPart
 			if pto, ok := ptOps[bo.Name]; ok && len(pto.Input) > 0 {
 				msg := msgByQName[localName(pto.Input[0].Message)]
+				parts = msg.Parts
 				if len(msg.Parts) > 0 {
 					rootElem = localName(msg.Parts[0].Element)
-					if rootElem == "" {
-						rootElem = msg.Parts[0].Name
-					}
 				}
 			}
 			op.InputName = rootElem
-			op.Request = idx.buildRequest(rootElem, d.TargetNS)
+
+			// Decide how to build the request body:
+			//  - If the message exposes an `element=` part and we can resolve it
+			//    against the schema → build it (document/literal).
+			//  - Otherwise (RPC/encoded `type=` parts, or an unresolvable element)
+			//    → build an RPC-style wrapper from the operation and its parts.
+			built := ""
+			if rootElem != "" {
+				built = idx.buildRequest(rootElem, d.TargetNS)
+			}
+			if built == "" || isPlaceholder(built) {
+				// RPC/encoded: wrap the operation name around its parts.
+				built = buildRPCRequest(bo.Name, d.TargetNS, parts)
+			}
+			op.Request = built
 			res.Operations = append(res.Operations, op)
 		}
 	}
@@ -208,4 +221,41 @@ func localName(q string) string {
 		return q[i+1:]
 	}
 	return q
+}
+
+// isPlaceholder reports whether a generated body is only an explanatory
+// comment/placeholder (i.e. nothing usable was produced).
+func isPlaceholder(s string) bool {
+	t := strings.TrimSpace(s)
+	return t == "" || (strings.HasPrefix(t, "<!--") && strings.HasSuffix(t, "-->"))
+}
+
+// buildRPCRequest builds an RPC/encoded style request body: an operation
+// wrapper element containing one child per message part. This handles the
+// common legacy pattern where parts are declared as <part name="x" type="xs:string"/>
+// rather than element-based (document/literal). The body contains only the
+// structural skeleton (empty values), never business data.
+func buildRPCRequest(opName, ns string, parts []wPart) string {
+	if opName == "" {
+		return "<!-- 无法确定操作名，请手动补全 -->"
+	}
+	var b strings.Builder
+	if ns != "" {
+		b.WriteString("<" + opName + ` xmlns="` + ns + `">` + "\n")
+	} else {
+		b.WriteString("<" + opName + ">\n")
+	}
+	for _, p := range parts {
+		name := p.Name
+		if name == "" {
+			name = "param"
+		}
+		if p.Type != "" {
+			b.WriteString("  <" + name + ` xsi:type="xsd:` + localName(p.Type) + `">` + "</" + name + ">\n")
+		} else {
+			b.WriteString("  <" + name + "></" + name + ">\n")
+		}
+	}
+	b.WriteString("</" + opName + ">")
+	return b.String()
 }
