@@ -508,14 +508,18 @@ async function handleTreeAction(data) {
       clearSelection(data.pid, data.sid, data.oid);
       await handlers.reload();
     } else if (action === 'add-call') {
-      const title = prompt('新请求样例标题：', '新请求');
-      if (title == null) return;
+      // Create immediately with the backend's default title, then start an
+      // in-place rename so the user can name it without an extra dialog.
       const url = projectURL(data.pid, `/services/${encodeURIComponent(data.sid)}/operations/${encodeURIComponent(data.oid)}/calls`);
-      const created = await apiJSON('POST', url, { title: title || '新请求' });
+      const created = await apiJSON('POST', url, { title: '' });
+      // The new call must be visible for the inline rename input to exist; make
+      // sure a previously collapsed operation is expanded before re-rendering.
+      if (isCollapsed(data.oid)) toggleCollapsed(data.oid);
       await handlers.reload();
       const ids = { pid: data.pid, sid: data.sid, oid: data.oid, cid: created.id };
       const found = findCall(ids);
       if (found) handlers.onSelect(found.call, 'call', { ids, parentOp: found.operation });
+      beginRename('call', ids);
     } else if (action === 'del-call') {
       if (!confirm('确定删除该请求样例？')) return;
       await apiJSON('DELETE', projectURL(data.pid, `/services/${encodeURIComponent(data.sid)}/operations/${encodeURIComponent(data.oid)}/calls/${encodeURIComponent(data.cid)}`));
