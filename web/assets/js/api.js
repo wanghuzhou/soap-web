@@ -35,3 +35,23 @@ export async function apiUpload(url, file) {
 export async function apiSend(payload) {
   return apiJSON('POST', '/api/send', payload);
 }
+
+// apiHealth probes /api/health and reports whether the local backend answers.
+// It never throws: the badge should switch to an offline state, not show an error.
+export async function apiHealth(timeoutMs = 3000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch('/api/health', {
+      signal: controller.signal,
+      cache: 'no-store',
+    });
+    if (!response.ok) return false;
+    const data = await response.json().catch(() => null);
+    return !!data && data.status === 'ok';
+  } catch (error) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}

@@ -2,7 +2,7 @@
 
 import { $ } from './dom.js';
 import { state, initCollapsed, findService, findOperation, findCall } from './state.js';
-import { apiGet, apiJSON, apiUpload } from './api.js';
+import { apiGet, apiHealth, apiJSON, apiUpload } from './api.js';
 import { toast } from './toast.js';
 import { initTheme } from './theme.js';
 import { initTree, renderTree } from './tree.js';
@@ -13,12 +13,39 @@ import { initLayout } from './layout.js';
 
 let pendingFileMode = null;
 
+// The badge reflects the last /api/health probe. Without this heartbeat it
+// would keep saying "就绪" forever once the page had loaded, even after the
+// backend was stopped.
+const HEALTH_INTERVAL_MS = 10000;
+
 function setServerState(ok, text) {
   const badge = $('serverState');
   if (!badge) return;
   badge.classList.toggle('is-error', !ok);
   const label = badge.querySelector('span:last-child');
   if (label) label.textContent = text;
+  const now = new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  badge.title = '本地服务状态：' + text + '（最近检查 ' + now + '，点击立即重试）';
+}
+
+async function checkHealth() {
+  if (document.hidden) return;
+  const ok = await apiHealth();
+  setServerState(ok, ok ? '就绪' : '已断开');
+}
+
+function startHealthMonitor() {
+  checkHealth();
+  setInterval(checkHealth, HEALTH_INTERVAL_MS);
+  // Re-check as soon as the tab becomes visible again instead of waiting for
+  // the next tick, and never claim "就绪" while the machine is offline.
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) checkHealth();
+  });
+  window.addEventListener('focus', checkHealth);
+  window.addEventListener('online', checkHealth);
+  window.addEventListener('offline', () => setServerState(false, '已断开'));
+  $('serverState').addEventListener('click', checkHealth);
 }
 
 async function loadProjects(selectFirst) {
@@ -152,6 +179,7 @@ function boot() {
   });
 
   updateEditButtons();
+  startHealthMonitor();
   loadProjects(true);
 }
 

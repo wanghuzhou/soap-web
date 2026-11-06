@@ -215,7 +215,10 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   color: var(--text-dim);
   font-size: 11.5px;
   white-space: nowrap;
+  cursor: pointer;
+  transition: border-color .15s, color .15s;
 }
+.status-badge:hover { border-color: var(--hover-border); color: var(--text); }
 .status-badge .dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--green);
