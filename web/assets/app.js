@@ -224,6 +224,76 @@ function updateEditButtons() {
 
 function esc(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
 
+/* ---------------- Proxy settings (per project) ---------------- */
+function proxyLabel(px) {
+  if (!px || !px.mode || px.mode === 'system') return '代理:系统';
+  if (px.mode === 'direct') return '代理:直连';
+  const t = (px.type === 'socks5') ? 'SOCKS5' : 'HTTP';
+  return '代理:' + t;
+}
+
+let proxyEditingPid = null;
+
+function openProxyDialog(pid) {
+  const p = (state.projects || []).find((x) => x.id === pid);
+  if (!p) return;
+  proxyEditingPid = pid;
+  $('proxyProjectName').textContent = '工程：' + (p.name || '');
+  const px = p.proxy || { mode: 'system' };
+  const mode = px.mode || 'system';
+  document.querySelectorAll('input[name="proxyMode"]').forEach((r) => { r.checked = (r.value === mode); });
+  $('proxyType').value = px.type || 'http';
+  $('proxyHost').value = px.host || '';
+  $('proxyPort').value = px.port || '';
+  $('proxyUser').value = px.username || '';
+  $('proxyPass').value = px.password || '';
+  updateProxyCustomVisibility();
+  $('proxyOverlay').classList.remove('hidden');
+}
+
+function closeProxyDialog() {
+  $('proxyOverlay').classList.add('hidden');
+  proxyEditingPid = null;
+}
+
+function updateProxyCustomVisibility() {
+  const mode = (document.querySelector('input[name="proxyMode"]:checked') || {}).value || 'system';
+  $('proxyCustom').classList.toggle('hidden', mode !== 'custom');
+}
+
+function readProxyForm() {
+  const mode = (document.querySelector('input[name="proxyMode"]:checked') || {}).value || 'system';
+  if (mode !== 'custom') return { mode };
+  return {
+    mode: 'custom',
+    type: $('proxyType').value,
+    host: $('proxyHost').value.trim(),
+    port: parseInt($('proxyPort').value, 10) || 0,
+    username: $('proxyUser').value,
+    password: $('proxyPass').value,
+  };
+}
+
+async function saveProxy() {
+  if (!proxyEditingPid) return;
+  const p = (state.projects || []).find((x) => x.id === proxyEditingPid);
+  if (!p) return;
+  const px = readProxyForm();
+  if (px.mode === 'custom') {
+    if (!px.host) { toast('请填写代理主机地址', true); return; }
+    if (!px.port) { toast('请填写代理端口', true); return; }
+  }
+  try {
+    const updated = Object.assign({}, p, { proxy: px });
+    await apiJSON('PUT', `/api/projects/${p.id}`, updated);
+    await reload();
+    closeProxyDialog();
+    toast('代理设置已保存');
+  } catch (e) {
+    toast('保存失败: ' + e.message, true);
+  }
+}
+
 /* ---------------- API helpers ---------------- */
 async function apiGet(url) {
   const r = await fetch(url);
@@ -288,7 +358,9 @@ function renderTree() {
       <div class="tree-node proj" data-kind="proj" data-pid="${p.id}">
         ${caret(p.id, false)}<span class="lbl">${escapeHtml(p.name || '工程')}</span>
         <span class="tag">${(p.source || 'native')}</span>
+        <span class="tag proxy-tag" title="代理模式">${proxyLabel(p.proxy)}</span>
         <span class="node-actions">
+          <button class="mini" title="代理设置" data-act="proxy-proj" data-pid="${p.id}">代理</button>
           <button class="mini" title="重命名工程" data-act="rename-proj" data-pid="${p.id}">✎</button>
           <button class="mini" title="导出 SoapUI XML" data-act="export-proj" data-pid="${p.id}">导出</button>
           <button class="mini" title="新建服务" data-act="add-svc" data-pid="${p.id}">+服务</button>
@@ -452,6 +524,8 @@ async function handleTreeAction(d, btn) {
       const url = `/api/projects/${d.pid}/services/${d.sid}/operations/${d.oid}/calls/${d.cid}`;
       await apiJSON('PUT', url, { id: d.cid, title, endpoint: call.endpoint, action: call.action, request: call.request });
       await reload();
+    } else if (act === 'proxy-proj') {
+      openProxyDialog(d.pid);
     } else if (act === 'del-proj') {
       const proj = (state.projects || []).find((x) => x.id === d.pid);
       if (!confirm('确定删除整个工程「' + ((proj && proj.name) || '') + '」？')) return;
@@ -627,6 +701,7 @@ async function send() {
     }
   }
   const payload = {
+    projectId: (state.selected && state.selected.ids && state.selected.ids.pid) || '',
     url,
     method: 'POST',
     contentType: ct,
@@ -784,6 +859,15 @@ window.addEventListener('DOMContentLoaded', () => {
   // Theme toggle (persisted).
   initTheme();
   $('btnTheme').addEventListener('click', toggleTheme);
+
+  // Proxy settings dialog.
+  $('proxyClose').addEventListener('click', closeProxyDialog);
+  $('proxyCancel').addEventListener('click', closeProxyDialog);
+  $('proxySave').addEventListener('click', saveProxy);
+  $('proxyOverlay').addEventListener('click', (e) => { if (e.target === $('proxyOverlay')) closeProxyDialog(); });
+  document.querySelectorAll('input[name="proxyMode"]').forEach((r) => {
+    r.addEventListener('change', updateProxyCustomVisibility);
+  });
 
   // Restore tree collapse state.
   initCollapsed();

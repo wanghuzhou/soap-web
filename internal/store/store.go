@@ -95,6 +95,9 @@ func (s *Store) Get(id string) (model.Project, error) {
 
 // AddProject appends a project, assigning an id if missing, and saves.
 func (s *Store) AddProject(p model.Project) (model.Project, error) {
+	if err := p.Proxy.Validate(); err != nil {
+		return p, err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if p.ID == "" {
@@ -110,6 +113,9 @@ func (s *Store) AddProject(p model.Project) (model.Project, error) {
 
 // UpdateProject replaces a whole project (matched by id) and saves.
 func (s *Store) UpdateProject(p model.Project) error {
+	if err := p.Proxy.Validate(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for i := range s.projects {

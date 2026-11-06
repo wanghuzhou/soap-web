@@ -98,6 +98,63 @@
   </div>
 
   <input id="fileInput" type="file" accept=".xml,.wsdl" hidden>
+
+  <!-- Proxy settings dialog (per project) -->
+  <div id="proxyOverlay" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="proxyTitle">
+      <div class="modal-head">
+        <span id="proxyTitle">工程代理设置</span>
+        <button id="proxyClose" class="modal-x" title="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-sub" id="proxyProjectName"></div>
+
+        <label class="radio-row">
+          <input type="radio" name="proxyMode" value="system">
+          <span><b>系统代理</b><small>使用操作系统 / 环境变量中的代理设置</small></span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="proxyMode" value="direct">
+          <span><b>直连</b><small>不使用任何代理，直接连接目标服务</small></span>
+        </label>
+        <label class="radio-row">
+          <input type="radio" name="proxyMode" value="custom">
+          <span><b>自定义代理</b><small>指定 HTTP 或 SOCKS5 代理服务器</small></span>
+        </label>
+
+        <div id="proxyCustom" class="proxy-custom hidden">
+          <div class="field-row">
+            <label>类型</label>
+            <select id="proxyType">
+              <option value="http">HTTP 代理</option>
+              <option value="socks5">SOCKS5 代理</option>
+            </select>
+          </div>
+          <div class="field-row">
+            <label>主机</label>
+            <input id="proxyHost" type="text" placeholder="127.0.0.1 或 proxy.corp.local" spellcheck="false">
+          </div>
+          <div class="field-row">
+            <label>端口</label>
+            <input id="proxyPort" type="number" min="1" max="65535" placeholder="8080">
+          </div>
+          <div class="field-row">
+            <label>用户名</label>
+            <input id="proxyUser" type="text" placeholder="可留空" spellcheck="false" autocomplete="off">
+          </div>
+          <div class="field-row">
+            <label>密码</label>
+            <input id="proxyPass" type="password" placeholder="可留空" autocomplete="new-password">
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <button id="proxyCancel" class="btn ghost">取消</button>
+        <button id="proxySave" class="btn primary">保存</button>
+      </div>
+    </div>
+  </div>
+
   <div id="toast" class="toast hidden"></div>
 
   <script src="/app.js"></script>

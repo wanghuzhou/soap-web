@@ -20,6 +20,10 @@ func (s *Server) handleProjects(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, "请求体解析失败: "+err.Error())
 			return
 		}
+		if err := p.Proxy.Validate(); err != nil {
+			writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
+			return
+		}
 		saved, err := s.Store.AddProject(p)
 		if err != nil {
 			mapStoreErr(w, err)
@@ -115,6 +119,10 @@ func (s *Server) projectRoot(w http.ResponseWriter, r *http.Request, pid string)
 			return
 		}
 		p.ID = pid
+		if err := p.Proxy.Validate(); err != nil {
+			writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
+			return
+		}
 		if err := s.Store.UpdateProject(p); err != nil {
 			mapStoreErr(w, err)
 			return

@@ -1,14 +1,54 @@
 // Package model defines the shared data structures used across the application.
 package model
 
+import "errors"
+
 // Project is the root container. It mirrors the structure of a SoapUI project
 // closely enough for import, while staying simple for our own needs.
 type Project struct {
-	ID         string      `json:"id"` // stable identifier for CRUD
-	Name       string      `json:"name"`
-	Source     string      `json:"source"` // e.g. "soapui" or "native"
-	Services   []Service   `json:"services"`
-	TestSuites []TestSuite `json:"testSuites"`
+	ID         string         `json:"id"` // stable identifier for CRUD
+	Name       string         `json:"name"`
+	Source     string         `json:"source"` // e.g. "soapui" or "native"
+	Proxy      *ProxySettings `json:"proxy,omitempty"`
+	Services   []Service      `json:"services"`
+	TestSuites []TestSuite    `json:"testSuites"`
+}
+
+// ProxySettings controls how requests of a project reach the network.
+// Mode is one of "system" (use OS/environment proxy), "direct" (no proxy) or
+// "custom". For custom, Type is "http" or "socks5"; Username/Password may be
+// empty when the proxy needs no authentication.
+type ProxySettings struct {
+	Mode     string `json:"mode"` // system | direct | custom
+	Type     string `json:"type"` // http | socks5
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
+// Validate reports whether the settings are usable.
+func (p *ProxySettings) Validate() error {
+	if p == nil {
+		return nil
+	}
+	switch p.Mode {
+	case "", "system", "direct":
+		return nil
+	case "custom":
+		if p.Host == "" {
+			return errors.New("自定义代理缺少主机地址")
+		}
+		if p.Port <= 0 || p.Port > 65535 {
+			return errors.New("自定义代理端口无效")
+		}
+		if p.Type != "http" && p.Type != "socks5" {
+			return errors.New("自定义代理类型必须是 http 或 socks5")
+		}
+		return nil
+	default:
+		return errors.New("未知的代理模式")
+	}
 }
 
 // Service represents a WSDL-described interface (a SoapUI "interface").
@@ -68,6 +108,7 @@ type TestStep struct {
 
 // SendRequest is the payload the frontend posts to execute an HTTP/SOAP call.
 type SendRequest struct {
+	ProjectID   string            `json:"projectId"` // used to resolve proxy settings
 	URL         string            `json:"url"`
 	Method      string            `json:"method"`
 	Headers     map[string]string `json:"headers"`

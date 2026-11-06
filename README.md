@@ -9,6 +9,7 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 
 - **工程持久化**：导入的 SoapUI 工程、解析的 WSDL 会保存在本地 `data/projects.json`，重启/刷新不丢失。
 - **完整增删改**：工程 / 服务(service) / 操作(operation) / 请求样例(call) 均可新建、重命名、删除；删除有二次确认。
+- **工程级代理**：每个工程可单独设置 **系统代理 / 直连 / 自定义代理**；自定义支持 **HTTP** 与 **SOCKS5**，用户名密码可留空。用于内网服务无法直连的场景。
 - **工程重命名 & 导出**：可重命名工程；可导出为 SoapUI 兼容的 `.xml`，方便带回 SoapUI 或分享给同事（导出的工程可再次被本工具导入，结构一致）。
 - **导入 SoapUI 工程**：解析 `.xml` 工程，载入 service / operation / 测试用例步骤及其已保存的请求报文与 endpoint，可一键重发。
 - **WSDL 解析**：解析 WSDL 1.1 + 内嵌 XSD，列出所有 operation，并自动生成结构正确的请求模板（支持嵌套 complexType、extension 继承、choice 降级）。

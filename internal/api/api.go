@@ -66,7 +66,14 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "缺少 url")
 		return
 	}
-	writeJSON(w, http.StatusOK, transport.Send(req))
+	// Resolve the project's proxy settings (if the request belongs to a project).
+	var proxyCfg *model.ProxySettings
+	if req.ProjectID != "" {
+		if p, err := s.Store.Get(req.ProjectID); err == nil {
+			proxyCfg = p.Proxy
+		}
+	}
+	writeJSON(w, http.StatusOK, transport.Send(req, proxyCfg))
 }
 
 // handleImportSoapUI parses an uploaded SoapUI project and persists it.
