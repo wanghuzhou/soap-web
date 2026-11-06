@@ -16,6 +16,8 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 - **SOAP 请求发送**：支持 SOAP 1.1（`text/xml` + `SOAPAction`）与 SOAP 1.2（`application/soap+xml` + action）。
 - **请求体编辑**：XML 语法高亮、格式化/压缩、长行自动换行。
 - **响应多视图**：格式化（语法高亮）/ 原始 / Headers，显示状态码、耗时、大小，支持一键复制。
+- **非 UTF-8 编码支持**：GBK / GB2312 / GB18030 / Big5 的响应体与 WSDL、SoapUI 工程均可正确解码（国内老 SOAP 服务常见）。响应体大小上限 16 MB，超出会标记「已截断」。
+- **报文保真**：格式化与换行规整不会改写文本内容——`<Token>  abc  </Token>` 的前后空格、`xml:space="preserve"`、多行 base64、含 `\n` 的 JSON/正则/Windows 路径都会原样保留。
 - **界面优化**：支持白天/夜间主题切换（跟随系统，记忆选择）；左中右三栏可拖动调整宽度（记忆宽度，窗口缩放自动收敛）；窄屏自动切换为请求/响应上下堆叠；长标题自动省略不撑高行；顶栏「本地服务状态」每 10 秒探活 `/api/health`，后端停止后自动变红提示“已断开”，点击可立即重试。
 - **可维护前端**：前端按职责拆分为 ES Modules（state / api / xml / tree / editor / response / proxy / theme / layout），无构建步骤、无外部依赖，仍随 Go 二进制内嵌分发。
 
@@ -52,6 +54,7 @@ go build -o bin\soapweb.exe .\cmd\soapweb
 ```
 cmd/soapweb         入口，启动 HTTP 服务
 internal/model      共享数据结构
+internal/charset    GBK / GB2312 / GB18030 / Big5 解码（响应体与 XML 文档共用）
 internal/transport  HTTP/SOAP 发送与响应归一化
 internal/soapuiproj SoapUI project xml 解析与导出
 internal/wsdl       WSDL 1.1 + XSD 解析与请求模板生成
@@ -63,15 +66,27 @@ web/assets/js/         前端 ES Modules（无构建步骤）
   app.js               入口与模块装配
   state.js             共享状态与树查找
   api.js               API 客户端
-  xml.js               XML 格式化 / 压缩 / 语法高亮
+  xml.js               XML 格式化 / 压缩 / 语法高亮 / 换行规整
   tree.js              工程树渲染与 CRUD
   editor.js            请求编辑与发送
   response.js          响应渲染与复制
   proxy.js             工程代理设置
   theme.js             明暗主题
   layout.js            可拖拽分栏与宽度持久化
+web/selftest/          前端回归自测（不参与 embed，不对外提供）
+  xml.selftest.mjs     XML 管线不变量断言
 web/embed.go            embed.FS 内嵌资源
 ```
+
+## 测试
+
+```bash
+go test ./...                              # 后端单元测试
+go test -race ./...                        # 含数据竞争检测
+node web/selftest/xml.selftest.mjs         # 前端 XML 管线回归自测（需 Node 18+）
+```
+
+`xml.selftest.mjs` 直接 import 真实的 ES Modules，覆盖格式化语义保真、换行规整不误伤数据、语法高亮转义等不变量；失败时以非零码退出，可挂到 CI。
 
 ## API
 
