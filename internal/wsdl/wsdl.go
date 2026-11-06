@@ -11,10 +11,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
-	"time"
 
 	"soapweb/internal/charset"
 	"soapweb/internal/model"
@@ -275,17 +272,6 @@ type Result struct {
 	Name       string            `json:"name"`
 	TargetNS   string            `json:"targetNamespace"`
 	Operations []model.Operation `json:"operations"`
-}
-
-// Fetch loads a WSDL from an http(s) URL (helper for future remote import).
-func Fetch(url string) ([]byte, error) {
-	c := &http.Client{Timeout: 30 * time.Second}
-	resp, err := c.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	return io.ReadAll(resp.Body)
 }
 
 func localName(q string) string {

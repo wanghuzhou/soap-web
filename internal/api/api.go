@@ -3,11 +3,15 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"mime"
 	"net/http"
+	"strings"
+	"sync"
 
 	"soapweb/internal/model"
 	"soapweb/internal/soapuiproj"
@@ -35,7 +39,95 @@ func (s *Server) Register(mux *http.ServeMux) {
 
 	s.registerProjectRoutes(mux)
 
-	mux.Handle("GET /", http.FileServer(s.StaticFS))
+	mux.Handle("GET /", staticHandler(s.StaticFS))
+}
+
+// staticHandler serves the embedded frontend with explicit cache headers.
+//
+// http.FileServer over an embed.FS emits neither Last-Modified nor ETag, because
+// embedded files have a zero modification time. With no Cache-Control either,
+// browsers fall back to heuristic caching: after upgrading the binary, the
+// browser could keep serving the old JS/CSS, producing the confusing "backend
+// is fixed but the UI still misbehaves" situation. ES modules make it worse,
+// since a stale entry caches the whole dependency graph.
+//
+// The fix is a strong ETag derived from the file content plus
+// `Cache-Control: no-cache`, which means "store it, but revalidate before use".
+// The browser therefore always confirms freshness (a cheap 304 when unchanged)
+// and can never run stale assets. Content hashes are computed once per file and
+// cached for the lifetime of the process, so revalidation costs a map lookup.
+func staticHandler(fs http.FileSystem) http.Handler {
+	fileServer := http.FileServer(fs)
+	var (
+		mu     sync.Mutex
+		etags  = map[string]string{}
+		hashes = map[string]string{}
+	)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Defence in depth against content sniffing.
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("Cache-Control", "no-cache")
+
+		if etag := etagFor(fs, r.URL.Path, &mu, etags, hashes); etag != "" {
+			w.Header().Set("ETag", etag)
+			if match := r.Header.Get("If-None-Match"); match != "" && etagMatches(match, etag) {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+}
+
+// etagFor returns a strong ETag for the requested asset, or "" if it cannot be
+// resolved (the FileServer will then produce its own 404).
+func etagFor(fs http.FileSystem, urlPath string, mu *sync.Mutex, etags, hashes map[string]string) string {
+	path := urlPath
+	if path == "" || path == "/" {
+		path = "/index.html"
+	}
+
+	mu.Lock()
+	if tag, ok := etags[path]; ok {
+		mu.Unlock()
+		return tag
+	}
+	mu.Unlock()
+
+	f, err := fs.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	stat, err := f.Stat()
+	if err != nil || stat.IsDir() {
+		return ""
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	tag := `"` + hex.EncodeToString(sum[:8]) + `"`
+
+	mu.Lock()
+	etags[path] = tag
+	hashes[path] = tag
+	mu.Unlock()
+	return tag
+}
+
+// etagMatches reports whether an If-None-Match header matches our ETag.
+// It handles the comma-separated list and the weak "W/" prefix.
+func etagMatches(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		candidate = strings.TrimPrefix(candidate, "W/")
+		if candidate == "*" || candidate == etag {
+			return true
+		}
+	}
+	return false
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

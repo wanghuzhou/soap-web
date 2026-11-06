@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -249,13 +248,3 @@ func CloseIdleConnections() {
 type proxyConfigError struct{ msg string }
 
 func (e *proxyConfigError) Error() string { return e.msg }
-
-// HeaderKeys returns sorted header names (helpers for deterministic tests).
-func HeaderKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
