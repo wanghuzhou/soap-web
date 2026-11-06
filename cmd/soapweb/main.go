@@ -78,11 +78,19 @@ func openBrowser(url string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+		// Use the cmd built-in `start`, which follows the current default-browser
+		// association. `rundll32 url.dll,FileProtocolHandler` silently fails to
+		// open a browser on some Windows 10/11 configurations.
+		cmd = exec.Command("cmd", "/c", "start", "", url)
 	case "darwin":
 		cmd = exec.Command("open", url)
 	default: // linux / *nix
 		cmd = exec.Command("xdg-open", url)
+	}
+	if runtime.GOOS == "windows" {
+		// cmd exits immediately after handing the URL to the shell, but waiting
+		// lets us report a genuinely missing browser association.
+		return cmd.Run()
 	}
 	return cmd.Start()
 }
