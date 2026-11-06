@@ -180,8 +180,10 @@ func Parse(data []byte) (*Result, error) {
 				built = idx.buildRequest(rootElem, d.TargetNS)
 			}
 			if built == "" || isPlaceholder(built) {
-				// RPC/encoded: wrap the operation name around its parts.
 				built = buildRPCRequest(bo.Name, d.TargetNS, parts)
+			}
+			if !isPlaceholder(built) {
+				built = wrapSOAPEnvelope(built, d.TargetNS)
 			}
 			op.Request = built
 			res.Operations = append(res.Operations, op)
@@ -221,6 +223,32 @@ func localName(q string) string {
 		return q[i+1:]
 	}
 	return q
+}
+
+// wrapSOAPEnvelope wraps a request payload element in a SOAP 1.1 Envelope so
+// the template is directly sendable. The payload is indented inside the Body.
+func wrapSOAPEnvelope(payload, ns string) string {
+	// Indent every payload line by 6 spaces (inside Envelope>Body).
+	lines := strings.Split(strings.TrimRight(payload, "\n"), "\n")
+	var indented strings.Builder
+	for _, ln := range lines {
+		indented.WriteString("      ")
+		indented.WriteString(ln)
+		indented.WriteString("\n")
+	}
+	var b strings.Builder
+	b.WriteString(`<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"`)
+	if ns != "" {
+		b.WriteString(` xmlns:xsd="http://www.w3.org/2001/XMLSchema"`)
+		b.WriteString(` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`)
+	}
+	b.WriteString(">\n")
+	b.WriteString("   <soapenv:Header/>\n")
+	b.WriteString("   <soapenv:Body>\n")
+	b.WriteString(indented.String())
+	b.WriteString("   </soapenv:Body>\n")
+	b.WriteString("</soapenv:Envelope>")
+	return b.String()
 }
 
 // isPlaceholder reports whether a generated body is only an explanatory
