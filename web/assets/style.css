@@ -396,7 +396,6 @@ body.resizing { cursor: col-resize; user-select: none; }
   padding-left: 18px;
   background: linear-gradient(to right, transparent, var(--border-soft) 16px);
 }
-.tree-node.selected .node-actions { background: linear-gradient(to right, transparent, var(--accent-soft) 16px); }
 .tree-node:hover .node-actions, .tree-node:focus-within .node-actions,
 .tree-node.menu-open .node-actions { display: flex; }
 .tree-node:hover > .tag, .tree-node:focus-within > .tag,
