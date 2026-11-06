@@ -4,6 +4,19 @@
 // It is safe for concurrent use. All writes are serialised and persisted
 // atomically (write to temp file, then rename) so a crash cannot leave a
 // half-written data file.
+//
+// Two invariants make that claim hold:
+//
+//   - Values handed out (List, Get) are deep copies, so a caller serialising a
+//     project cannot observe a concurrent mutation through a shared backing
+//     array. A shallow copy would still share the inner Services/Operations/
+//     Calls slices with the store, which is a genuine data race once the API
+//     serves two requests at the same time.
+//
+//   - Mutations are applied to a copy, persisted, and only then swapped into
+//     memory. If persisting fails, memory is left untouched; otherwise the API
+//     would report an error while the object stayed alive in the server and
+//     vanished on the next restart.
 package store
 
 import (
@@ -57,9 +70,11 @@ func NewID() string {
 	return hex.EncodeToString(b)
 }
 
-// save persists the current projects atomically. Caller must hold the lock.
-func (s *Store) save() error {
-	data, err := json.MarshalIndent(s.projects, "", "  ")
+// saveProjects persists the given project list atomically. Caller must hold the
+// lock. Writing to a temp file and renaming means a crash mid-write cannot
+// truncate the real data file.
+func (s *Store) saveProjects(projects []model.Project) error {
+	data, err := json.MarshalIndent(projects, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -70,22 +85,120 @@ func (s *Store) save() error {
 	return os.Rename(tmp, s.path)
 }
 
-// List returns a copy of all projects.
-func (s *Store) List() []model.Project {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	out := make([]model.Project, len(s.projects))
-	copy(out, s.projects)
+// commit applies mutate to a deep copy of the project list, persists the result,
+// and only then installs it as the in-memory state.
+//
+// This keeps memory and disk in lockstep: if the write fails the caller sees an
+// error and the store still holds exactly what is on disk. Caller must hold the
+// write lock.
+func (s *Store) commit(mutate func([]model.Project) ([]model.Project, error)) error {
+	next := cloneProjects(s.projects)
+	next, err := mutate(next)
+	if err != nil {
+		return err
+	}
+	if err := s.saveProjects(next); err != nil {
+		return err
+	}
+	s.projects = next
+	return nil
+}
+
+// ---- deep copy helpers ----
+
+// cloneProject returns a project that shares no mutable state with p.
+func cloneProject(p model.Project) model.Project {
+	out := p
+	if p.Proxy != nil {
+		proxy := *p.Proxy
+		out.Proxy = &proxy
+	}
+	if p.Services != nil {
+		out.Services = make([]model.Service, len(p.Services))
+		for i, svc := range p.Services {
+			out.Services[i] = cloneService(svc)
+		}
+	}
+	if p.TestSuites != nil {
+		out.TestSuites = make([]model.TestSuite, len(p.TestSuites))
+		for i, ts := range p.TestSuites {
+			out.TestSuites[i] = cloneTestSuite(ts)
+		}
+	}
 	return out
 }
 
-// Get returns one project by id.
+func cloneService(svc model.Service) model.Service {
+	out := svc
+	if svc.Operations != nil {
+		out.Operations = make([]model.Operation, len(svc.Operations))
+		for i, op := range svc.Operations {
+			out.Operations[i] = cloneOperation(op)
+		}
+	}
+	return out
+}
+
+func cloneOperation(op model.Operation) model.Operation {
+	out := op
+	if op.Calls != nil {
+		out.Calls = make([]model.Call, len(op.Calls))
+		copy(out.Calls, op.Calls)
+	}
+	return out
+}
+
+func cloneTestSuite(ts model.TestSuite) model.TestSuite {
+	out := ts
+	if ts.TestCases != nil {
+		out.TestCases = make([]model.TestCase, len(ts.TestCases))
+		for i, tc := range ts.TestCases {
+			c := tc
+			if tc.Steps != nil {
+				c.Steps = make([]model.TestStep, len(tc.Steps))
+				copy(c.Steps, tc.Steps)
+			}
+			out.TestCases[i] = c
+		}
+	}
+	return out
+}
+
+func cloneProjects(in []model.Project) []model.Project {
+	if in == nil {
+		return nil
+	}
+	out := make([]model.Project, len(in))
+	for i, p := range in {
+		out[i] = cloneProject(p)
+	}
+	return out
+}
+
+// indexOfProject returns the index of a project by id, or -1.
+func indexOfProject(list []model.Project, id string) int {
+	for i := range list {
+		if list[i].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
+// List returns a deep copy of all projects.
+func (s *Store) List() []model.Project {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return cloneProjects(s.projects)
+}
+
+// Get returns a deep copy of one project by id.
 func (s *Store) Get(id string) (model.Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	for _, p := range s.projects {
 		if p.ID == id {
-			return p, nil
+			return cloneProject(p), nil
 		}
 	}
 	return model.Project{}, ErrNotFound
@@ -107,8 +220,10 @@ func (s *Store) AddProject(p model.Project) (model.Project, error) {
 		p.Name = "未命名工程"
 	}
 	assignIDs(&p)
-	s.projects = append(s.projects, p)
-	return p, s.save()
+	err := s.commit(func(list []model.Project) ([]model.Project, error) {
+		return append(list, cloneProject(p)), nil
+	})
+	return p, err
 }
 
 // UpdateProject replaces a whole project (matched by id) and saves.
@@ -118,115 +233,157 @@ func (s *Store) UpdateProject(p model.Project) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := range s.projects {
-		if s.projects[i].ID == p.ID {
-			s.projects[i] = p
-			return s.save()
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		i := indexOfProject(list, p.ID)
+		if i < 0 {
+			return nil, ErrNotFound
 		}
+		list[i] = cloneProject(p)
+		return list, nil
+	})
+}
+
+// UpdateProjectProxy updates only the proxy settings of a project.
+//
+// Sending a whole project back to the server just to change a proxy toggle is
+// unsafe: the client's copy is a snapshot, so a concurrent edit in another tab
+// (or a WSDL import that landed in between) would be overwritten wholesale.
+// This narrow write touches exactly one field.
+func (s *Store) UpdateProjectProxy(id string, proxy *model.ProxySettings) error {
+	if err := proxy.Validate(); err != nil {
+		return err
 	}
-	return ErrNotFound
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		i := indexOfProject(list, id)
+		if i < 0 {
+			return nil, ErrNotFound
+		}
+		if proxy == nil {
+			list[i].Proxy = nil
+		} else {
+			p := *proxy
+			list[i].Proxy = &p
+		}
+		return list, nil
+	})
+}
+
+// RenameProject updates only a project's name.
+func (s *Store) RenameProject(id, name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		i := indexOfProject(list, id)
+		if i < 0 {
+			return nil, ErrNotFound
+		}
+		list[i].Name = name
+		return list, nil
+	})
 }
 
 // DeleteProject removes a project by id.
 func (s *Store) DeleteProject(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i := range s.projects {
-		if s.projects[i].ID == id {
-			s.projects = append(s.projects[:i], s.projects[i+1:]...)
-			return s.save()
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		i := indexOfProject(list, id)
+		if i < 0 {
+			return nil, ErrNotFound
 		}
-	}
-	return ErrNotFound
+		return append(list[:i], list[i+1:]...), nil
+	})
 }
 
 // ---- nested CRUD helpers ----
-
-// findProject locates a project index. Caller must hold the lock.
-func (s *Store) findProject(id string) (int, error) {
-	for i := range s.projects {
-		if s.projects[i].ID == id {
-			return i, nil
-		}
-	}
-	return -1, ErrNotFound
-}
 
 // AddService appends a service to a project.
 func (s *Store) AddService(projectID string, svc model.Service) (model.Service, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pi, err := s.findProject(projectID)
-	if err != nil {
-		return svc, err
-	}
 	if svc.ID == "" {
 		svc.ID = NewID()
 	}
 	for i := range svc.Operations {
 		assignOperationIDs(&svc.Operations[i])
 	}
-	s.projects[pi].Services = append(s.projects[pi].Services, svc)
-	return svc, s.save()
+	err := s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi := indexOfProject(list, projectID)
+		if pi < 0 {
+			return nil, ErrNotFound
+		}
+		list[pi].Services = append(list[pi].Services, cloneService(svc))
+		return list, nil
+	})
+	return svc, err
 }
 
 // DeleteService removes a service from a project.
 func (s *Store) DeleteService(projectID, serviceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pi, err := s.findProject(projectID)
-	if err != nil {
-		return err
-	}
-	svcs := s.projects[pi].Services
-	for i := range svcs {
-		if svcs[i].ID == serviceID {
-			s.projects[pi].Services = append(svcs[:i], svcs[i+1:]...)
-			return s.save()
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi := indexOfProject(list, projectID)
+		if pi < 0 {
+			return nil, ErrNotFound
 		}
-	}
-	return ErrNotFound
+		for i := range list[pi].Services {
+			if list[pi].Services[i].ID == serviceID {
+				list[pi].Services = append(list[pi].Services[:i], list[pi].Services[i+1:]...)
+				return list, nil
+			}
+		}
+		return nil, ErrNotFound
+	})
 }
 
 // AddOperation appends an operation to a service.
 func (s *Store) AddOperation(projectID, serviceID string, op model.Operation) (model.Operation, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pi, err := s.findProject(projectID)
-	if err != nil {
-		return op, err
-	}
-	for si := range s.projects[pi].Services {
-		if s.projects[pi].Services[si].ID == serviceID {
-			assignOperationIDs(&op)
-			s.projects[pi].Services[si].Operations = append(s.projects[pi].Services[si].Operations, op)
-			return op, s.save()
+	assignOperationIDs(&op)
+	err := s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi := indexOfProject(list, projectID)
+		if pi < 0 {
+			return nil, ErrNotFound
 		}
-	}
-	return op, ErrNotFound
+		for si := range list[pi].Services {
+			if list[pi].Services[si].ID != serviceID {
+				continue
+			}
+			list[pi].Services[si].Operations = append(list[pi].Services[si].Operations, cloneOperation(op))
+			return list, nil
+		}
+		return nil, ErrNotFound
+	})
+	return op, err
 }
 
 // DeleteOperation removes an operation from a service.
 func (s *Store) DeleteOperation(projectID, serviceID, opID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pi, err := s.findProject(projectID)
-	if err != nil {
-		return err
-	}
-	for si := range s.projects[pi].Services {
-		svc := &s.projects[pi].Services[si]
-		if svc.ID != serviceID {
-			continue
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi := indexOfProject(list, projectID)
+		if pi < 0 {
+			return nil, ErrNotFound
 		}
-		for oi := range svc.Operations {
-			if svc.Operations[oi].ID == opID {
-				svc.Operations = append(svc.Operations[:oi], svc.Operations[oi+1:]...)
-				return s.save()
+		for si := range list[pi].Services {
+			svc := &list[pi].Services[si]
+			if svc.ID != serviceID {
+				continue
+			}
+			for oi := range svc.Operations {
+				if svc.Operations[oi].ID == opID {
+					svc.Operations = append(svc.Operations[:oi], svc.Operations[oi+1:]...)
+					return list, nil
+				}
 			}
 		}
-	}
-	return ErrNotFound
+		return nil, ErrNotFound
+	})
 }
 
 // AddCall appends a request sample (call) to an operation.
@@ -239,18 +396,21 @@ func (s *Store) AddCall(projectID, serviceID, opID string, call model.Call) (mod
 	if call.Title == "" {
 		call.Title = "新请求 " + time.Now().Format("15:04:05")
 	}
-	pi, err := s.findProject(projectID)
-	if err != nil {
-		return call, err
-	}
-	for si := range s.projects[pi].Services {
-		svc := &s.projects[pi].Services[si]
-		if svc.ID != serviceID {
-			continue
+	err := s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi := indexOfProject(list, projectID)
+		if pi < 0 {
+			return nil, ErrNotFound
 		}
-		for oi := range svc.Operations {
-			if svc.Operations[oi].ID == opID {
+		for si := range list[pi].Services {
+			svc := &list[pi].Services[si]
+			if svc.ID != serviceID {
+				continue
+			}
+			for oi := range svc.Operations {
 				op := &svc.Operations[oi]
+				if op.ID != opID {
+					continue
+				}
 				// Seed the new request from the operation's structural template
 				// (方案 A: pure skeleton from WSDL, no business data). Fall back
 				// to op.Request only when no Template exists.
@@ -270,71 +430,76 @@ func (s *Store) AddCall(projectID, serviceID, opID string, call model.Call) (mod
 					call.Action = op.SoapAction
 				}
 				op.Calls = append(op.Calls, call)
-				return call, s.save()
+				return list, nil
 			}
 		}
-	}
-	return call, ErrNotFound
+		return nil, ErrNotFound
+	})
+	return call, err
 }
 
 // UpdateCall replaces a call (by id) within an operation.
 func (s *Store) UpdateCall(projectID, serviceID, opID string, call model.Call) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pi, err := s.findProject(projectID)
-	if err != nil {
-		return err
-	}
-	for si := range s.projects[pi].Services {
-		svc := &s.projects[pi].Services[si]
-		if svc.ID != serviceID {
-			continue
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi := indexOfProject(list, projectID)
+		if pi < 0 {
+			return nil, ErrNotFound
 		}
-		for oi := range svc.Operations {
-			op := &svc.Operations[oi]
-			if op.ID != opID {
+		for si := range list[pi].Services {
+			svc := &list[pi].Services[si]
+			if svc.ID != serviceID {
 				continue
 			}
-			for ci := range op.Calls {
-				if op.Calls[ci].ID == call.ID {
-					op.Calls[ci] = call
-					return s.save()
+			for oi := range svc.Operations {
+				op := &svc.Operations[oi]
+				if op.ID != opID {
+					continue
 				}
+				for ci := range op.Calls {
+					if op.Calls[ci].ID == call.ID {
+						op.Calls[ci] = call
+						return list, nil
+					}
+				}
+				return nil, ErrNotFound
 			}
-			return ErrNotFound
 		}
-	}
-	return ErrNotFound
+		return nil, ErrNotFound
+	})
 }
 
 // DeleteCall removes a call from an operation.
 func (s *Store) DeleteCall(projectID, serviceID, opID, callID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pi, err := s.findProject(projectID)
-	if err != nil {
-		return err
-	}
-	for si := range s.projects[pi].Services {
-		svc := &s.projects[pi].Services[si]
-		if svc.ID != serviceID {
-			continue
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi := indexOfProject(list, projectID)
+		if pi < 0 {
+			return nil, ErrNotFound
 		}
-		for oi := range svc.Operations {
-			op := &svc.Operations[oi]
-			if op.ID != opID {
+		for si := range list[pi].Services {
+			svc := &list[pi].Services[si]
+			if svc.ID != serviceID {
 				continue
 			}
-			for ci := range op.Calls {
-				if op.Calls[ci].ID == callID {
-					op.Calls = append(op.Calls[:ci], op.Calls[ci+1:]...)
-					return s.save()
+			for oi := range svc.Operations {
+				op := &svc.Operations[oi]
+				if op.ID != opID {
+					continue
 				}
+				for ci := range op.Calls {
+					if op.Calls[ci].ID == callID {
+						op.Calls = append(op.Calls[:ci], op.Calls[ci+1:]...)
+						return list, nil
+					}
+				}
+				return nil, ErrNotFound
 			}
-			return ErrNotFound
 		}
-	}
-	return ErrNotFound
+		return nil, ErrNotFound
+	})
 }
 
 // assignIDs fills in missing ids throughout a project tree.

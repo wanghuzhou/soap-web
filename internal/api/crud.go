@@ -18,6 +18,9 @@ func (s *Server) registerProjectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/projects/{pid}", s.handleUpdateProject)
 	mux.HandleFunc("DELETE /api/projects/{pid}", s.handleDeleteProject)
 	mux.HandleFunc("GET /api/projects/{pid}/export", s.handleExportProject)
+	// Narrow writes: avoid replacing the whole project tree for a one-field
+	// change, which would clobber concurrent edits made in another tab.
+	mux.HandleFunc("PUT /api/projects/{pid}/proxy", s.handleUpdateProjectProxy)
 
 	mux.HandleFunc("POST /api/projects/{pid}/services", s.handleAddService)
 	mux.HandleFunc("DELETE /api/projects/{pid}/services/{sid}", s.handleDeleteService)
@@ -83,6 +86,25 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleUpdateProjectProxy updates only a project's proxy settings.
+func (s *Server) handleUpdateProjectProxy(w http.ResponseWriter, r *http.Request) {
+	proxy, ok := decodeJSON[*model.ProxySettings](w, r)
+	if !ok {
+		return
+	}
+	// Validate before touching the store so a bad config is a 400 (client
+	// error), not a 500.
+	if err := proxy.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
+		return
+	}
+	if err := s.Store.UpdateProjectProxy(r.PathValue("pid"), proxy); err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proxy": proxy})
 }
 
 // handleExportProject serialises a project as SoapUI-compatible XML for download.
