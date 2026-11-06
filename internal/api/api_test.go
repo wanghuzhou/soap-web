@@ -95,6 +95,76 @@ func TestSaveProjectRejectsInvalidProxy(t *testing.T) {
 	}
 }
 
+func TestNestedProjectCRUDRoutes(t *testing.T) {
+	dir := t.TempDir()
+	st, err := store.New(filepath.Join(dir, "projects.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &Server{Store: st}
+	mux := http.NewServeMux()
+	srv.Register(mux)
+
+	request := func(method, path string, payload any, out any) *httptest.ResponseRecorder {
+		t.Helper()
+		var body []byte
+		if payload != nil {
+			body, _ = json.Marshal(payload)
+		}
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		if payload != nil {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if out != nil && rec.Code == http.StatusOK {
+			if err := json.Unmarshal(rec.Body.Bytes(), out); err != nil {
+				t.Fatalf("%s %s: decode response: %v", method, path, err)
+			}
+		}
+		return rec
+	}
+
+	var project model.Project
+	if rec := request(http.MethodPost, "/api/projects", model.Project{Name: "p"}, &project); rec.Code != http.StatusOK {
+		t.Fatalf("create project: %d %s", rec.Code, rec.Body.String())
+	}
+
+	var service model.Service
+	if rec := request(http.MethodPost, "/api/projects/"+project.ID+"/services", model.Service{Name: "svc"}, &service); rec.Code != http.StatusOK {
+		t.Fatalf("add service: %d %s", rec.Code, rec.Body.String())
+	}
+
+	var operation model.Operation
+	if rec := request(http.MethodPost, "/api/projects/"+project.ID+"/services/"+service.ID+"/operations", model.Operation{Name: "op"}, &operation); rec.Code != http.StatusOK {
+		t.Fatalf("add operation: %d %s", rec.Code, rec.Body.String())
+	}
+
+	var call model.Call
+	if rec := request(http.MethodPost, "/api/projects/"+project.ID+"/services/"+service.ID+"/operations/"+operation.ID+"/calls", model.Call{Title: "c1"}, &call); rec.Code != http.StatusOK {
+		t.Fatalf("add call: %d %s", rec.Code, rec.Body.String())
+	}
+
+	call.Title = "renamed"
+	if rec := request(http.MethodPut, "/api/projects/"+project.ID+"/services/"+service.ID+"/operations/"+operation.ID+"/calls/"+call.ID, call, nil); rec.Code != http.StatusOK {
+		t.Fatalf("update call: %d %s", rec.Code, rec.Body.String())
+	}
+	got, err := st.Get(project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Services[0].Operations[0].Calls[0].Title != "renamed" {
+		t.Errorf("call title = %q", got.Services[0].Operations[0].Calls[0].Title)
+	}
+
+	if rec := request(http.MethodDelete, "/api/projects/"+project.ID+"/services/"+service.ID+"/operations/"+operation.ID+"/calls/"+call.ID, nil, nil); rec.Code != http.StatusOK {
+		t.Fatalf("delete call: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := request(http.MethodGet, "/api/projects/"+project.ID, nil, nil); rec.Code != http.StatusOK {
+		t.Fatalf("get project: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func p2ptr(p model.Project) *model.Project { return &p }
 
 func portOf(u *url.URL) int {
