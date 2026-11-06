@@ -4,95 +4,156 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>soap-web · SOAP 接口调试</title>
+  <script>
+    // Apply the persisted theme before first paint to avoid a flash.
+    (function () {
+      try {
+        var query = new URLSearchParams(location.search).get('theme');
+        var saved = (query === 'light' || query === 'dark') ? query : localStorage.getItem('soap-web-theme');
+        if (!saved) {
+          saved = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        if (saved === 'light') document.documentElement.setAttribute('data-theme', 'light');
+      } catch (e) { /* ignore */ }
+    }());
+  </script>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <div id="app">
     <header class="topbar">
       <div class="brand">
-        <span class="logo">§</span>
-        <span class="title">soap-web</span>
-        <span class="subtitle">SOAP / WSDL 接口调试</span>
+        <span class="logo" aria-hidden="true">S</span>
+        <span class="brand-copy">
+          <span class="title">soap-web</span>
+          <span class="subtitle">SOAP / WSDL 接口调试</span>
+        </span>
       </div>
       <div class="topbar-actions">
-        <button id="btnTheme" class="btn ghost" title="切换白天/夜间模式">☀ 白天</button>
-        <button id="btnNewProject" class="btn ghost" title="新建空白工程">新建工程</button>
-        <button id="btnImport" class="btn ghost" title="导入 SoapUI 工程 (.xml)">导入 SoapUI 工程</button>
-        <button id="btnWsdl" class="btn ghost" title="解析 WSDL 生成请求">解析 WSDL</button>
-        <span id="serverState" class="badge">就绪</span>
+        <div class="action-group" role="group" aria-label="工程操作">
+          <button id="btnNewProject" class="btn ghost" title="新建空白工程">
+            <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 3.5v9M3.5 8h9"/></svg></span><span class="btn-text">新建工程</span>
+          </button>
+          <button id="btnImport" class="btn ghost" title="导入 SoapUI 工程（.xml）">
+            <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 2.5v7.2M5.2 7.1 8 9.9l2.8-2.8"/><path d="M3 11.4v1.3c0 .7.6 1.3 1.3 1.3h7.4c.7 0 1.3-.6 1.3-1.3v-1.3"/></svg></span><span class="btn-text">导入工程</span>
+          </button>
+          <button id="btnWsdl" class="btn ghost" title="解析 WSDL 生成请求">
+            <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5.2 3.5 2 8l3.2 4.5M10.8 3.5 14 8l-3.2 4.5M9.3 2.8 6.7 13.2"/></svg></span><span class="btn-text">解析 WSDL</span>
+          </button>
+        </div>
+        <span class="topbar-divider" aria-hidden="true"></span>
+        <button id="btnTheme" class="btn ghost btn-compact" title="切换白天/夜间模式" aria-label="切换主题">
+          <span id="themeIcon" aria-hidden="true">☀</span><span id="themeLabel" class="btn-text">白天</span>
+        </button>
+        <span id="serverState" class="status-badge" title="本地服务状态">
+          <span class="dot" aria-hidden="true"></span><span>就绪</span>
+        </span>
       </div>
     </header>
 
-    <main class="workspace">
+    <main class="workspace" id="workspace">
       <!-- Left: project tree -->
-      <aside class="sidebar" id="paneLeft">
-        <div class="pane-head">工程</div>
-        <div id="tree" class="tree">
-          <div class="empty-hint">导入 SoapUI 工程或解析 WSDL 后<br>操作会显示在这里。</div>
+      <aside class="sidebar" id="paneLeft" aria-label="工程树">
+        <div class="pane-head">
+          <div class="pane-title">
+            <span class="pane-kicker">工程</span>
+            <span id="projectCount" class="count-badge">0</span>
+          </div>
+          <button id="btnNewProjectSide" class="icon-btn" title="新建空白工程" aria-label="新建空白工程">＋</button>
+        </div>
+        <div id="tree" class="tree" role="tree" aria-label="工程列表">
+          <div class="empty-state">
+            <div class="empty-icon" aria-hidden="true">⌁</div>
+            <div class="empty-title">还没有工程</div>
+            <div class="empty-desc">点击顶部「导入工程」或「解析 WSDL」开始</div>
+          </div>
         </div>
       </aside>
 
-      <div class="resizer" id="resizerLeft" title="拖动调整宽度"></div>
+      <div class="resizer" id="resizerLeft" title="拖动调整宽度，双击复位" role="separator" aria-orientation="vertical"></div>
 
       <!-- Center: request editor -->
-      <section class="editor-pane" id="paneMid">
+      <section class="editor-pane" id="paneMid" aria-label="请求编辑">
         <div class="pane-head">
-          <span>请求</span>
-          <span id="reqTitle" class="muted"></span>
+          <div class="pane-title">
+            <span class="pane-kicker">请求</span>
+            <span id="reqTitle" class="pane-subtitle">未选择请求</span>
+          </div>
+          <span id="reqBadge" class="chip hidden">SOAP 1.1</span>
         </div>
-        <div class="req-controls">
+
+        <div class="request-meta">
           <div class="field-row">
-            <label>Endpoint</label>
-            <input id="endpoint" type="text" placeholder="http://host/service.asmx" spellcheck="false">
+            <label for="endpoint">Endpoint</label>
+            <input id="endpoint" type="text" placeholder="http://host/service.asmx" spellcheck="false" autocomplete="off">
           </div>
-          <div class="field-row">
-            <label>SOAPAction</label>
-            <input id="soapAction" type="text" placeholder="http://tempuri.org/Op" spellcheck="false">
-          </div>
-          <div class="field-row">
-            <label>Content-Type</label>
-            <select id="contentType">
-              <option value="text/xml; charset=utf-8">text/xml (SOAP 1.1)</option>
-              <option value="application/soap+xml; charset=utf-8">application/soap+xml (SOAP 1.2)</option>
-            </select>
+          <div class="field-grid">
+            <div class="field-row">
+              <label for="soapAction">SOAPAction</label>
+              <input id="soapAction" type="text" placeholder="http://tempuri.org/Op" spellcheck="false" autocomplete="off">
+            </div>
+            <div class="field-row">
+              <label for="contentType">Content-Type</label>
+              <select id="contentType">
+                <option value="text/xml; charset=utf-8">text/xml (SOAP 1.1)</option>
+                <option value="application/soap+xml; charset=utf-8">application/soap+xml (SOAP 1.2)</option>
+              </select>
+            </div>
           </div>
         </div>
+
+        <div class="editor-toolbar">
+          <span class="editor-label">XML 报文</span>
+          <div class="editor-tools">
+            <button id="btnFormat" class="tool-btn" title="美化 XML 缩进 (Ctrl+Shift+F)">格式化</button>
+            <button id="btnMinify" class="tool-btn" title="压缩为单行">压缩</button>
+            <span class="toolbar-sep" aria-hidden="true"></span>
+            <label class="check-label"><input id="autoFormat" type="checkbox" checked> 载入时自动格式化</label>
+          </div>
+        </div>
+
         <div class="editor-wrap" id="editorWrap">
           <!-- Highlight layer sits behind a transparent textarea for syntax colouring. -->
           <pre id="requestHighlight" class="editor-highlight" aria-hidden="true"></pre>
           <textarea id="requestBody" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" wrap="soft" placeholder="&lt;soapenv:Envelope ...&gt; ... &lt;/soapenv:Envelope&gt;"></textarea>
         </div>
+
         <div class="send-bar">
-          <button id="btnSend" class="btn primary">发送请求 <span class="kbd">Ctrl+Enter</span></button>
+          <button id="btnSend" class="btn primary send-btn">发送请求 <span class="kbd">Ctrl+Enter</span></button>
           <button id="btnSaveCall" class="btn ghost" title="保存当前请求样例到工程" disabled>保存请求</button>
           <button id="btnDeleteNode" class="btn ghost danger-text" title="删除当前选中项" disabled>删除</button>
-          <button id="btnFormat" class="btn ghost" title="美化 XML 缩进 (Ctrl+Shift+F)">格式化 XML</button>
-          <button id="btnMinify" class="btn ghost" title="压缩为单行">压缩</button>
-          <label class="auto-format"><input id="autoFormat" type="checkbox" checked> 载入时自动格式化</label>
           <span id="sendInfo" class="send-info"></span>
         </div>
       </section>
 
-      <div class="resizer" id="resizerRight" title="拖动调整宽度"></div>
+      <div class="resizer" id="resizerRight" title="拖动调整宽度，双击复位" role="separator" aria-orientation="vertical"></div>
 
       <!-- Right: response -->
-      <section class="response-pane" id="paneRight">
+      <section class="response-pane" id="paneRight" aria-label="响应">
         <div class="pane-head">
-          <span>响应</span>
-          <div class="resp-tabs">
-            <button class="tab active" data-view="pretty">格式化</button>
-            <button class="tab" data-view="raw">原始</button>
-            <button class="tab" data-view="headers">Headers</button>
+          <div class="pane-title">
+            <span class="pane-kicker">响应</span>
+            <span id="respSummary" class="pane-subtitle"></span>
+          </div>
+          <div class="resp-tabs" role="tablist" aria-label="响应视图">
+            <button class="tab active" data-view="pretty" role="tab" aria-selected="true">格式化</button>
+            <button class="tab" data-view="raw" role="tab" aria-selected="false">原始</button>
+            <button class="tab" data-view="headers" role="tab" aria-selected="false">Headers</button>
           </div>
         </div>
         <div id="respMeta" class="resp-meta hidden">
           <span id="respStatus" class="status-pill"></span>
-          <span id="respTime" class="muted"></span>
-          <span id="respSize" class="muted"></span>
+          <span id="respTime" class="meta-item"></span>
+          <span id="respSize" class="meta-item"></span>
+          <button id="btnCopyResp" class="btn ghost btn-xs">复制响应</button>
         </div>
-        <pre id="respBody" class="resp-body">
-<span class="empty-hint">发送请求后，响应会显示在这里。</span>
-        </pre>
+        <div id="respBody" class="resp-body">
+          <div class="empty-state">
+            <div class="empty-icon" aria-hidden="true">→</div>
+            <div class="empty-title">发送请求后，响应会显示在这里</div>
+            <div class="empty-desc">选择请求样例、填写 Endpoint，然后按 Ctrl+Enter 发送</div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -104,7 +165,7 @@
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="proxyTitle">
       <div class="modal-head">
         <span id="proxyTitle">工程代理设置</span>
-        <button id="proxyClose" class="modal-x" title="关闭">✕</button>
+        <button id="proxyClose" class="modal-x" title="关闭" aria-label="关闭">✕</button>
       </div>
       <div class="modal-body">
         <div class="modal-sub" id="proxyProjectName"></div>
@@ -124,26 +185,26 @@
 
         <div id="proxyCustom" class="proxy-custom hidden">
           <div class="field-row">
-            <label>类型</label>
+            <label for="proxyType">类型</label>
             <select id="proxyType">
               <option value="http">HTTP 代理</option>
               <option value="socks5">SOCKS5 代理</option>
             </select>
           </div>
           <div class="field-row">
-            <label>主机</label>
+            <label for="proxyHost">主机</label>
             <input id="proxyHost" type="text" placeholder="127.0.0.1 或 proxy.corp.local" spellcheck="false">
           </div>
           <div class="field-row">
-            <label>端口</label>
+            <label for="proxyPort">端口</label>
             <input id="proxyPort" type="number" min="1" max="65535" placeholder="8080">
           </div>
           <div class="field-row">
-            <label>用户名</label>
+            <label for="proxyUser">用户名</label>
             <input id="proxyUser" type="text" placeholder="可留空" spellcheck="false" autocomplete="off">
           </div>
           <div class="field-row">
-            <label>密码</label>
+            <label for="proxyPass">密码</label>
             <input id="proxyPass" type="password" placeholder="可留空" autocomplete="new-password">
           </div>
         </div>
@@ -155,8 +216,8 @@
     </div>
   </div>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <script src="/app.js"></script>
+  <script type="module" src="/js/app.js"></script>
 </body>
 </html>
