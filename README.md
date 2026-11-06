@@ -9,6 +9,7 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 
 - **工程持久化**：导入的 SoapUI 工程、解析的 WSDL 会保存在本地 `data/projects.json`，重启/刷新不丢失。
 - **完整增删改**：工程 / 服务(service) / 操作(operation) / 请求样例(call) 均可新建、重命名、删除；删除有二次确认。
+- **工程重命名 & 导出**：可重命名工程；可导出为 SoapUI 兼容的 `.xml`，方便带回 SoapUI 或分享给同事（导出的工程可再次被本工具导入，结构一致）。
 - **导入 SoapUI 工程**：解析 `.xml` 工程，载入 service / operation / 测试用例步骤及其已保存的请求报文与 endpoint，可一键重发。
 - **WSDL 解析**：解析 WSDL 1.1 + 内嵌 XSD，列出所有 operation，并自动生成结构正确的请求模板（支持嵌套 complexType、extension 继承、choice 降级）。
 - **SOAP 请求发送**：支持 SOAP 1.1（`text/xml` + `SOAPAction`）与 SOAP 1.2（`application/soap+xml` + action）。
@@ -52,7 +53,8 @@ web/                内嵌前端（embed.FS，零依赖 SPA）
 | POST | `/api/wsdl/parse` | 上传 WSDL，解析并**保存**为新工程，返回 `{service, project}` |
 | GET | `/api/projects` | 列出所有已保存工程 |
 | POST | `/api/projects` | 新建工程 |
-| GET/PUT/DELETE | `/api/projects/{pid}` | 获取 / 整体更新 / 删除工程 |
+| GET/PUT/DELETE | `/api/projects/{pid}` | 获取 / 整体更新（含重命名）/ 删除工程 |
+| GET | `/api/projects/{pid}/export` | 导出为 SoapUI 兼容 XML（下载） |
 | POST | `/api/projects/{pid}/services` | 新建服务 |
 | DELETE | `/api/projects/{pid}/services/{sid}` | 删除服务 |
 | POST | `/api/projects/{pid}/services/{sid}/operations` | 新建操作 |

@@ -3,8 +3,10 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"soapweb/internal/model"
+	"soapweb/internal/soapuiproj"
 )
 
 // handleProjects handles /api/projects (list + create).
@@ -58,9 +60,43 @@ func (s *Server) handleProjectItem(w http.ResponseWriter, r *http.Request) {
 	switch rest[0] {
 	case "services":
 		s.servicesRoute(w, r, pid, rest[1:])
+	case "export":
+		s.exportProject(w, r, pid)
 	default:
 		writeErr(w, http.StatusNotFound, "未知路径")
 	}
+}
+
+// exportProject serialises a project as SoapUI-compatible XML for download.
+func (s *Server) exportProject(w http.ResponseWriter, r *http.Request, pid string) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "仅支持 GET")
+		return
+	}
+	p, err := s.Store.Get(pid)
+	if err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	data, err := soapuiproj.Marshal(p)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "生成 SoapUI XML 失败: "+err.Error())
+		return
+	}
+	name := p.Name
+	if name == "" {
+		name = "project"
+	}
+	w.Header().Set("Content-Type", "application/xml; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(name)+`-soapui-project.xml"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// sanitizeFilename keeps filename-safe characters only.
+func sanitizeFilename(s string) string {
+	rep := strings.NewReplacer("/", "_", "\\", "_", ":", "_", "*", "_", "?", "_", `"`, "_", "<", "_", ">", "_", "|", "_", " ", "_")
+	return rep.Replace(s)
 }
 
 func (s *Server) projectRoot(w http.ResponseWriter, r *http.Request, pid string) {

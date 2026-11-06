@@ -246,6 +246,8 @@ function renderTree() {
         <span class="ico">▾</span>${escapeHtml(p.name || '工程')}
         <span class="tag">${(p.source || 'native')}</span>
         <span class="node-actions">
+          <button class="mini" title="重命名工程" data-act="rename-proj" data-pid="${p.id}">✎</button>
+          <button class="mini" title="导出 SoapUI XML" data-act="export-proj" data-pid="${p.id}">导出</button>
           <button class="mini" title="新建服务" data-act="add-svc" data-pid="${p.id}">+服务</button>
           <button class="mini danger" title="删除工程" data-act="del-proj" data-pid="${p.id}">✕</button>
         </span>
@@ -376,6 +378,24 @@ async function handleTreeAction(d, btn) {
       if (!confirm('确定删除整个工程「' + ((proj && proj.name) || '') + '」？')) return;
       await apiJSON('DELETE', `/api/projects/${d.pid}`);
       await reload();
+    } else if (act === 'rename-proj') {
+      const proj = (state.projects || []).find((x) => x.id === d.pid);
+      if (!proj) return;
+      const name = prompt('重命名工程：', proj.name || '');
+      if (name == null || name === proj.name) return;
+      const updated = Object.assign({}, proj, { name });
+      await apiJSON('PUT', `/api/projects/${d.pid}`, updated);
+      await reload();
+      toast('工程已重命名');
+    } else if (act === 'export-proj') {
+      // Trigger a file download of the SoapUI-compatible XML.
+      const a = document.createElement('a');
+      a.href = `/api/projects/${d.pid}/export`;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      toast('已导出 SoapUI XML');
     }
   } catch (e) {
     toast(e.message, true);
