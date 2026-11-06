@@ -5,7 +5,7 @@ import { state, initCollapsed, findService, findOperation, findCall } from './st
 import { apiGet, apiHealth, apiJSON, apiUpload } from './api.js';
 import { toast } from './toast.js';
 import { initTheme } from './theme.js';
-import { initTree, renderTree } from './tree.js';
+import { initTree, renderTree, syncSelection } from './tree.js';
 import { initEditor, loadNode, updateEditButtons, isDirty } from './editor.js';
 import { initResponse } from './response.js';
 import { initProxy } from './proxy.js';
@@ -62,6 +62,21 @@ async function loadProjects(selectFirst) {
   }
 }
 
+// reload re-fetches projects and re-syncs the UI.
+//
+// It serves two distinct situations:
+//
+//   - structural change (a node was added, deleted or renamed): the tree must be
+//     rebuilt, otherwise a newly created request never appears until the page is
+//     refreshed;
+//   - pure refresh (proxy saved, selection moved): the tree only needs its
+//     selection marker updated.
+//
+// The tree rebuild is therefore unconditional here, while loadNode() stays
+// selection-only. Splitting them the other way round (rebuild inside loadNode)
+// would reintroduce the full-tree re-parse on every click, and skipping the
+// rebuild entirely breaks node creation — both mistakes are easy to make, so
+// the responsibility is stated explicitly at each call site.
 async function reload() {
   const selected = state.selected;
   try {
@@ -73,46 +88,58 @@ async function reload() {
     return;
   }
 
-  if (selected) {
-    if (selected.kind === 'call') {
-      const found = findCall(selected.ids);
-      if (found) {
-        // reload() runs after many unrelated actions (adding a service,
-        // deleting an operation, saving proxy settings). Re-loading the same
-        // sample would overwrite the user's in-progress edits with the server
-        // copy, silently discarding unsaved XML. When the editor is dirty we
-        // keep the user's text and only refresh the tree and selection state.
-        if (isDirty()) {
-          state.selected = {
-            kind: 'call',
-            node: found.call,
-            ids: selected.ids,
-            parentOp: found.operation,
-          };
-          updateEditButtons();
-          renderTree();
-          return;
-        }
-        loadNode(found.call, 'call', { ids: selected.ids, parentOp: found.operation });
-        return;
-      }
-    } else if (selected.kind === 'op') {
-      const found = findOperation(selected.ids.pid, selected.ids.sid, selected.ids.oid);
-      if (found) {
-        loadNode(found.operation, 'op', { ids: selected.ids });
-        return;
-      }
-    } else if (selected.kind === 'svc') {
-      const found = findService(selected.ids.pid, selected.ids.sid);
-      if (found) {
-        loadNode(found.service, 'svc', { ids: selected.ids });
-        return;
-      }
-    }
-    state.selected = null;
-  }
-  updateEditButtons();
+  // The project list changed: rebuild the tree first so the rows the user just
+  // created exist, then re-apply selection onto the fresh DOM.
   renderTree();
+
+  if (!selected) {
+    updateEditButtons();
+    return;
+  }
+
+  if (selected.kind === 'call') {
+    const found = findCall(selected.ids);
+    if (!found) {
+      state.selected = null;
+      updateEditButtons();
+      return;
+    }
+    // Do not overwrite in-progress edits with the server copy: reload() runs
+    // after unrelated actions too (adding a service, deleting an operation,
+    // saving proxy settings).
+    if (isDirty()) {
+      state.selected = {
+        kind: 'call',
+        node: found.call,
+        ids: selected.ids,
+        parentOp: found.operation,
+      };
+      updateEditButtons();
+      syncSelection();
+      return;
+    }
+    loadNode(found.call, 'call', { ids: selected.ids, parentOp: found.operation });
+    return;
+  }
+
+  if (selected.kind === 'op') {
+    const found = findOperation(selected.ids.pid, selected.ids.sid, selected.ids.oid);
+    if (found) {
+      loadNode(found.operation, 'op', { ids: selected.ids });
+      return;
+    }
+  } else if (selected.kind === 'svc') {
+    const found = findService(selected.ids.pid, selected.ids.sid);
+    if (found) {
+      loadNode(found.service, 'svc', { ids: selected.ids });
+      return;
+    }
+  }
+
+  // The selected node is gone (it was deleted, or its parent was).
+  state.selected = null;
+  updateEditButtons();
+  syncSelection();
 }
 
 function selectFirstInProject(project) {
