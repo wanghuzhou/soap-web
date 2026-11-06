@@ -11,10 +11,13 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/proxy"
 
+	"soapweb/internal/charset"
 	"soapweb/internal/model"
 )
 
@@ -67,42 +70,115 @@ func Send(req model.SendRequest, proxyCfg *model.ProxySettings) model.SendRespon
 
 	start := time.Now()
 	resp, err := client.Do(httpReq)
-	out.DurationMS = time.Since(start).Milliseconds()
 	if err != nil {
+		out.DurationMS = time.Since(start).Milliseconds()
 		out.Error = "请求失败: " + err.Error()
 		return out
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		out.Error = "读取响应失败: " + err.Error()
-		out.Status = resp.StatusCode
-		out.StatusText = http.StatusText(resp.StatusCode)
-		return out
-	}
-
+	// Snapshot status and headers before reading the body: if the read fails
+	// (timeout mid-stream, truncated connection) the caller still needs the
+	// status line and headers to understand what happened.
 	out.Status = resp.StatusCode
 	out.StatusText = http.StatusText(resp.StatusCode)
-	out.Body = string(body)
-	out.Size = len(body)
 	for k, vals := range resp.Header {
 		if len(vals) > 0 {
 			out.Headers[k] = vals[0]
 		}
 	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyBytes))
+	out.DurationMS = time.Since(start).Milliseconds()
+	if err != nil {
+		// Keep whatever arrived so a truncated response is still inspectable.
+		out.Body = decodeBody(body, resp.Header.Get("Content-Type"))
+		out.Size = len(body)
+		out.Error = "读取响应失败: " + err.Error()
+		return out
+	}
+
+	out.Body = decodeBody(body, resp.Header.Get("Content-Type"))
+	out.Size = len(body)
+	if len(body) >= maxBodyBytes {
+		out.Truncated = true
+	}
 	return out
 }
 
-// buildClient constructs an http.Client whose transport follows the project's
-// proxy settings.
+// maxBodyBytes caps how much of a response we read. Debugging payloads are
+// small; an unbounded io.ReadAll on a runaway endpoint would allocate gigabytes
+// and then be copied again into a string for JSON encoding.
+const maxBodyBytes = 16 << 20 // 16 MB
+
+// decodeBody converts the response body to UTF-8.
+//
+// Legacy Chinese services commonly answer with charset=GBK (or declare
+// encoding="GBK" in the XML declaration) while the bytes themselves are not
+// UTF-8. Reading them as UTF-8 produces mojibake, so the charset is resolved
+// from the Content-Type header first, then from the XML declaration.
+func decodeBody(body []byte, contentType string) string {
+	if len(body) == 0 {
+		return ""
+	}
+	// The Content-Type header is authoritative when it names a charset.
+	if cs := charsetFromContentType(contentType); cs != "" {
+		return string(charset.Decode(body, cs))
+	}
+	// Otherwise fall back to the document's own XML declaration.
+	return string(charset.DecodeXML(body))
+}
+
+// charsetFromContentType extracts charset= from a Content-Type header value.
+func charsetFromContentType(contentType string) string {
+	for _, part := range strings.Split(contentType, ";") {
+		part = strings.TrimSpace(part)
+		if len(part) < 8 || !strings.EqualFold(part[:8], "charset=") {
+			continue
+		}
+		return strings.Trim(part[8:], `"' `)
+	}
+	return ""
+}
+
+// transports caches one *http.Transport per proxy configuration.
+//
+// Allocating a fresh Transport per request leaked three goroutines every time
+// (readLoop, writeLoop, persistConn) because the previous Transport was never
+// closed and its idle connections were never reaped. Debugging a service means
+// sending many requests, so the leak grew without bound. Transports are now
+// shared and their idle connections are reused.
+var transports = struct {
+	mu sync.Mutex
+	m  map[string]*http.Transport
+}{m: map[string]*http.Transport{}}
+
+// buildClient returns a client honouring the proxy settings and timeout.
+// The underlying Transport is shared; only the per-request timeout varies.
 func buildClient(cfg *model.ProxySettings, timeout time.Duration) (*http.Client, error) {
+	tr, err := transportFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &http.Client{Transport: tr, Timeout: timeout}, nil
+}
+
+// transportFor returns the shared Transport for cfg, creating it on first use.
+func transportFor(cfg *model.ProxySettings) (*http.Transport, error) {
+	key := transportKey(cfg)
+
+	transports.mu.Lock()
+	defer transports.mu.Unlock()
+	if tr, ok := transports.m[key]; ok {
+		return tr, nil
+	}
+
 	tr := &http.Transport{
-		Proxy:                 nil,
-		MaxIdleConns:          20,
-		IdleConnTimeout:       30 * time.Second,
-		TLSHandshakeTimeout:   15 * time.Second,
-		ResponseHeaderTimeout: timeout,
+		Proxy:               nil,
+		MaxIdleConns:        20,
+		MaxIdleConnsPerHost: 10,
+		IdleConnTimeout:     90 * time.Second,
+		TLSHandshakeTimeout: 15 * time.Second,
 	}
 
 	mode := "system"
@@ -147,7 +223,27 @@ func buildClient(cfg *model.ProxySettings, timeout time.Duration) (*http.Client,
 		return nil, &proxyConfigError{"未知的代理模式: " + mode}
 	}
 
-	return &http.Client{Transport: tr, Timeout: timeout}, nil
+	transports.m[key] = tr
+	return tr, nil
+}
+
+// transportKey identifies a proxy configuration for the Transport cache.
+func transportKey(cfg *model.ProxySettings) string {
+	if cfg == nil {
+		return "system|"
+	}
+	return cfg.Mode + "|" + cfg.Type + "|" + cfg.Host + "|" +
+		strconv.Itoa(cfg.Port) + "|" + cfg.Username + "|" + cfg.Password
+}
+
+// CloseIdleConnections drops pooled connections held by every cached
+// Transport. Used by tests and on shutdown.
+func CloseIdleConnections() {
+	transports.mu.Lock()
+	defer transports.mu.Unlock()
+	for _, tr := range transports.m {
+		tr.CloseIdleConnections()
+	}
 }
 
 type proxyConfigError struct{ msg string }

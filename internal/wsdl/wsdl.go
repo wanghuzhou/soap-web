@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"soapweb/internal/charset"
 	"soapweb/internal/model"
 )
 
@@ -112,10 +113,14 @@ type wPart struct {
 
 // Parse parses a WSDL byte slice into a model-style Service (defined in model).
 func Parse(data []byte) (*Result, error) {
+	// CharsetReader handles documents whose XML declaration names a legacy
+	// charset (GBK etc.). Do NOT also pre-transcode the bytes: the decoder
+	// would then apply the declared charset a second time and mangle UTF-8.
 	clean := strings.TrimPrefix(string(data), "\ufeff")
 	var d defs
 	dec := xml.NewDecoder(strings.NewReader(clean))
 	dec.Strict = false
+	dec.CharsetReader = charset.Reader
 	if err := dec.Decode(&d); err != nil {
 		return nil, err
 	}

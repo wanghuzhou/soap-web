@@ -125,5 +125,6 @@ type SendResponse struct {
 	Body       string            `json:"body"`
 	DurationMS int64             `json:"durationMs"`
 	Size       int               `json:"size"`
+	Truncated  bool              `json:"truncated,omitempty"` // body hit the size cap
 	Error      string            `json:"error,omitempty"`
 }

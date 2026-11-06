@@ -11,6 +11,7 @@ import (
 	"html"
 	"strings"
 
+	"soapweb/internal/charset"
 	"soapweb/internal/model"
 	"soapweb/internal/wsdl"
 )
@@ -123,11 +124,14 @@ type xmlConfig struct {
 
 // Parse decodes SoapUI project bytes into a model.Project.
 func Parse(data []byte) (*model.Project, error) {
+	// CharsetReader handles legacy declared charsets (SoapUI projects are often
+	// saved as GBK). The bytes themselves are left untouched: pre-transcoding
+	// here would be applied a second time by the decoder.
 	clean := sanitizeXML(data)
 	var raw xmlProject
 	dec := xml.NewDecoder(strings.NewReader(clean))
 	dec.Strict = false
-	dec.CharsetReader = charsetReader
+	dec.CharsetReader = charset.Reader
 	if err := dec.Decode(&raw); err != nil {
 		return nil, err
 	}
