@@ -129,6 +129,49 @@ func TestDeleteMissing(t *testing.T) {
 	}
 }
 
+func TestAddCallSeedsTemplate(t *testing.T) {
+	s, _ := newTestStore(t)
+	// Operation carries a template + endpoint + action.
+	p, _ := s.AddProject(model.Project{
+		Name: "p",
+		Services: []model.Service{{
+			Name: "svc",
+			Operations: []model.Operation{{
+				Name:       "Op",
+				Endpoint:   "http://e",
+				SoapAction: "urn:op",
+				Request:    "<template/>",
+			}},
+		}},
+	})
+	svc := p.Services[0]
+	op := svc.Operations[0]
+
+	// Create a call with no request → should inherit template/endpoint/action.
+	c, err := s.AddCall(p.ID, svc.ID, op.ID, model.Call{Title: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Request != "<template/>" {
+		t.Errorf("request not seeded: %q", c.Request)
+	}
+	if c.Endpoint != "http://e" {
+		t.Errorf("endpoint not seeded: %q", c.Endpoint)
+	}
+	if c.Action != "urn:op" {
+		t.Errorf("action not seeded: %q", c.Action)
+	}
+
+	// A call with an explicit request must NOT be overwritten.
+	c2, err := s.AddCall(p.ID, svc.ID, op.ID, model.Call{Title: "x", Request: "<mine/>"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c2.Request != "<mine/>" {
+		t.Errorf("explicit request overwritten: %q", c2.Request)
+	}
+}
+
 func TestAssignIDsDeep(t *testing.T) {
 	s, _ := newTestStore(t)
 	p, err := s.AddProject(model.Project{

@@ -414,7 +414,21 @@ async function handleTreeAction(d, btn) {
       const title = prompt('新请求样例标题：', '新请求');
       if (title == null) return;
       const dir = `/api/projects/${d.pid}/services/${d.sid}/operations/${d.oid}/calls`;
-      const created = await apiJSON('POST', dir, { title: title || '新请求', request: '' });
+      // Seed the new request with the operation's XML template so the user
+      // starts from a ready-to-edit body instead of a blank editor.
+      const proj0 = (state.projects || []).find((x) => x.id === d.pid);
+      const svc0 = proj0 && (proj0.services || []).find((s) => s.id === d.sid);
+      const op0 = svc0 && (svc0.operations || []).find((o) => o.id === d.oid);
+      let template = (op0 && op0.request) || '';
+      if (!template && op0 && op0.calls && op0.calls.length) {
+        template = op0.calls[0].request || '';
+      }
+      const created = await apiJSON('POST', dir, {
+        title: title || '新请求',
+        endpoint: (op0 && op0.endpoint) || '',
+        action: (op0 && op0.soapAction) || '',
+        request: template,
+      });
       await reload();
       // select the newly created call
       const proj = (state.projects || []).find((x) => x.id === d.pid);

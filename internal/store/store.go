@@ -244,7 +244,23 @@ func (s *Store) AddCall(projectID, serviceID, opID string, call model.Call) (mod
 		}
 		for oi := range svc.Operations {
 			if svc.Operations[oi].ID == opID {
-				svc.Operations[oi].Calls = append(svc.Operations[oi].Calls, call)
+				op := &svc.Operations[oi]
+				// Seed the new request from the operation's template when the
+				// caller did not provide one, so the user starts with a ready
+				// request body instead of a blank editor.
+				if call.Request == "" {
+					call.Request = op.Request
+					if call.Request == "" && len(op.Calls) > 0 {
+						call.Request = op.Calls[0].Request
+					}
+				}
+				if call.Endpoint == "" {
+					call.Endpoint = op.Endpoint
+				}
+				if call.Action == "" {
+					call.Action = op.SoapAction
+				}
+				op.Calls = append(op.Calls, call)
 				return call, s.save()
 			}
 		}
