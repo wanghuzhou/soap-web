@@ -1,12 +1,30 @@
 // XML helpers: newline normalisation, pretty printing, minifying and the
 // lightweight syntax highlighter used by the request/response panes.
 
+// escapeHtml escapes the five XML special characters.
+//
+// Quotes are escaped too. This function is used both for text content and,
+// via escapeAttr in dom.js, for attribute values; escaping quotes makes it
+// safe in both contexts, so the two can never be mixed up.
 export function escapeHtml(value) {
-  return String(value == null ? '' : value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => {
+    switch (ch) {
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      default: return '&#39;';
+    }
+  });
 }
+
+// TOKEN_RE splits XML into CDATA, comments, PIs, tags and text.
+//
+// Every alternative is anchored by a distinct prefix and none can match the
+// same input twice, so matching runs in linear time. Both prettyXML and
+// highlightXML use it, so formatting and colouring always agree on what
+// counts as a token.
+const TOKEN_RE = /<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/?[^>]+>|[^<]+/g;
 
 // MAX_INDENT_DEPTH caps indentation growth. Indent cost is O(depth) per line,
 // so a pathologically deep (or truncated) payload would otherwise expand to tens
@@ -35,12 +53,11 @@ export function prettyXML(xml) {
   const text = xml == null ? '' : xml;
   if (!text.trim() || text.trim()[0] !== '<') return text;
 
-  // Tokenise into CDATA, comments, PIs, opening/closing/self-closing tags, text.
   // `index` is kept so verbatim runs can be sliced from the original source.
-  const re = /<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/?[^>]+>|[^<]+/g;
   const tokens = [];
   let match;
-  while ((match = re.exec(text)) !== null) {
+  TOKEN_RE.lastIndex = 0;
+  while ((match = TOKEN_RE.exec(text)) !== null) {
     tokens.push({ raw: match[0], index: match.index, kind: classifyToken(match[0]) });
   }
 
@@ -160,17 +177,85 @@ export function minifyXML(xml) {
   return s;
 }
 
+// ATTR_RE matches name="value" / name='value' inside a tag. The tag text is
+// already delimited by TOKEN_RE, so this never has to scan past the tag.
+// It runs on the *raw* (unescaped) attribute text, so quotes are still real
+// quote characters here; escaping happens afterwards on the pieces.
+const ATTR_RE = /([\w:.\-]+)\s*=\s*("[^"]*"|'[^']*')/g;
+
+// highlightXML returns HTML with XML syntax colouring.
+//
+// The previous implementation ran three sequential global replaces over the
+// escaped text. The tag regex,
+//
+//     /(&lt;\/?)([\w:.-]+)((?:[^&]|&(?!gt;))*?)(\/?&gt;)/
+//
+// had overlapping match classes: [\w:.-] and the lazy "anything but &gt;"
+// group both consumed word characters, so a "&lt;" followed by a long run of
+// word characters with no closing "&gt;" (a truncated tag, a long URL or hex
+// identifier) degraded into O(n²) backtracking. Measured: 16 K characters took
+// 389 ms and extrapolated to seconds at 64 K. It also wrapped comments and
+// CDATA first and then re-matched tags inside them, producing nested spans and
+// broken colouring.
+//
+// This version tokenises once and colours each token independently: no
+// backtracking, no nesting, and linear in the input length.
 export function highlightXML(xml) {
-  let s = escapeHtml(xml);
-  s = s.replace(/(&lt;!\[CDATA\[[\s\S]*?\]\]&gt;)/g, '<span class="x-cdata">$1</span>');
-  s = s.replace(/(&lt;!--[\s\S]*?--&gt;)/g, '<span class="x-comment">$1</span>');
-  s = s.replace(/(&lt;\/?)([\w:.-]+)((?:[^&]|&(?!gt;))*?)(\/?&gt;)/g,
-    (match, open, name, attrs, close) => {
-      const attrHtml = attrs.replace(/([\w:.-]+)\s*=\s*("([^"]*)"|'([^']*)')/g,
-        (am, attrName, quoted) => ` <span class="x-attr">${attrName}</span>=<span class="x-val">${quoted}</span>`);
-      return `<span class="x-tag">${open}${name}</span>${attrHtml}<span class="x-tag">${close}</span>`;
-    });
-  return s;
+  const text = xml == null ? '' : String(xml);
+  const tokens = text.match(TOKEN_RE);
+  if (!tokens) return escapeHtml(text);
+
+  let out = '';
+  for (const token of tokens) {
+    if (token.startsWith('<![CDATA[')) {
+      out += '<span class="x-cdata">' + escapeHtml(token) + '</span>';
+    } else if (token.startsWith('<!--')) {
+      out += '<span class="x-comment">' + escapeHtml(token) + '</span>';
+    } else if (token.startsWith('<?')) {
+      out += '<span class="x-pi">' + escapeHtml(token) + '</span>';
+    } else if (token.startsWith('<')) {
+      out += highlightTag(token);
+    } else {
+      out += escapeHtml(token);
+    }
+  }
+  return out;
+}
+
+// highlightTag colours one tag token. The token is already delimited, so the
+// attribute regex cannot run away.
+function highlightTag(token) {
+  const open = token.startsWith('</') ? '</' : '<';
+  const close = token.endsWith('/>') ? '/>' : '>';
+  const body = token.slice(open.length, token.length - close.length);
+
+  // Split the tag name from the attribute list at the first whitespace.
+  let name = body;
+  let rest = '';
+  const space = body.search(/[\s]/);
+  if (space >= 0) {
+    name = body.slice(0, space);
+    rest = body.slice(space);
+  }
+
+  // Match attributes on the RAW text (quotes are still literal here), then
+  // escape each piece. Escaping first would turn " into &quot; and the
+  // attribute regex would no longer see a quoted value.
+  let attrs = '';
+  let cursor = 0;
+  ATTR_RE.lastIndex = 0;
+  let m;
+  while ((m = ATTR_RE.exec(rest)) !== null) {
+    attrs += escapeHtml(rest.slice(cursor, m.index));
+    attrs += '<span class="x-attr">' + escapeHtml(m[1]) + '</span>='
+      + '<span class="x-val">' + escapeHtml(m[2]) + '</span>';
+    cursor = m.index + m[0].length;
+  }
+  attrs += escapeHtml(rest.slice(cursor));
+
+  return '<span class="x-tag">' + escapeHtml(open + name) + '</span>'
+    + attrs
+    + '<span class="x-tag">' + escapeHtml(close) + '</span>';
 }
 
 // SoapUI stores line breaks in some projects as the literal two-character

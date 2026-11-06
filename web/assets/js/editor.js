@@ -10,6 +10,31 @@ import { renderResponse } from './response.js';
 
 let reloadHandler = async () => {};
 
+// Send state.
+//
+// The previous implementation guarded concurrency with button.disabled alone,
+// which three paths could bypass: loadNode() calls updateEditButtons() and
+// re-enables the button while a request is in flight; the global Ctrl+Enter
+// shortcut calls send() directly without checking anything; and there was no
+// AbortController. Combined with state.response being a global singleton that
+// loadNode() never cleared, a response for request A could be rendered onto
+// the panel of request B, which is the worst possible failure for a debugging
+// tool.
+//
+// Now: `sending` is the real gate, `sendSeq` identifies the current request so
+// late responses are discarded, and `abortController` lets the user cancel.
+let sending = false;
+let sendSeq = 0;
+let abortController = null;
+let loadedSnapshot = '';
+
+// saving guards the write paths so a double-click cannot fire two PUTs.
+let saving = false;
+
+// SEND_TIMEOUT_MS is the client-side request timeout. The server enforces its
+// own copy; this bound just keeps the UI from waiting forever.
+const SEND_TIMEOUT_MS = 60_000;
+
 export function initEditor({ reload }) {
   reloadHandler = reload || reloadHandler;
 
@@ -65,7 +90,28 @@ function setRequestBody(value, doFormat) {
   let content = normalizeNewlines(value || '');
   if (doFormat) content = prettyXML(content);
   textarea.value = content;
+  // Snapshot what we loaded so isDirty() can tell user edits from our own.
+  loadedSnapshot = content;
   renderHighlight();
+}
+
+// isDirty reports whether the editor holds changes not yet saved.
+export function isDirty() {
+  const textarea = $('requestBody');
+  return !!textarea && textarea.value !== loadedSnapshot;
+}
+
+// clearResponseIfOther drops the response pane when the user selects a
+// different request sample, so a stale response is never mistaken for the
+// current one. Re-selecting the same sample keeps its response.
+function clearResponseIfOther(ids) {
+  const current = state.response;
+  if (!current) return;
+  const prev = current._ids;
+  if (!prev || !sameIds(prev, ids)) {
+    state.response = null;
+    renderResponse();
+  }
 }
 
 function updateReqBadge() {
@@ -81,6 +127,11 @@ function updateReqBadge() {
 }
 
 export function loadNode(node, kind, path = {}) {
+  // The response pane belongs to the sample that produced it. Leaving a stale
+  // response visible after switching samples made it look like the response
+  // came from the newly selected one.
+  clearResponseIfOther(path.ids);
+
   state.selected = {
     kind,
     node,
@@ -127,9 +178,14 @@ export function updateEditButtons() {
   const selected = state.selected;
   const isCall = !!selected && selected.kind === 'call';
   const canDelete = !!selected && (selected.kind === 'call' || selected.kind === 'op' || selected.kind === 'svc');
-  $('btnSaveCall').disabled = !isCall;
-  $('btnDeleteNode').disabled = !canDelete;
-  $('btnSend').disabled = !isCall;
+  $('btnSaveCall').disabled = !isCall || saving;
+  $('btnDeleteNode').disabled = !canDelete || saving;
+  // While a request is in flight the button becomes a Cancel action, so it
+  // stays enabled but its label and handler change (see send()).
+  const btnSend = $('btnSend');
+  btnSend.disabled = sending ? false : !isCall;
+  btnSend.textContent = sending ? '取消' : '发送';
+  btnSend.classList.toggle('is-cancel', sending);
 }
 
 function formatBody() {
@@ -240,7 +296,21 @@ function callURL(ids) {
     + '/calls/' + encodeURIComponent(ids.cid);
 }
 
+// send executes the current request, or cancels the in-flight one.
+//
+// Concurrency rules:
+//   - `sending` is the single source of truth; Ctrl+Enter cannot bypass it.
+//   - Each request captures the ids it was started for. When the response
+//     arrives, it is discarded if the selection has moved on or a newer send
+//     has superseded it, so a response never renders onto another sample's
+//     panel.
 async function send() {
+  // Clicking while a request is in flight cancels it.
+  if (sending) {
+    if (abortController) abortController.abort();
+    return;
+  }
+
   if (!state.selected || state.selected.kind !== 'call') {
     toast('请先在工程树中选择一个请求样例', true);
     return;
@@ -270,28 +340,54 @@ async function send() {
     contentType,
     headers,
     body: $('requestBody').value,
-    timeoutMs: 60000,
+    timeoutMs: SEND_TIMEOUT_MS,
   };
 
-  const button = $('btnSend');
   const info = $('sendInfo');
-  button.disabled = true;
-  info.textContent = '发送中…';
+  const targetIds = Object.assign({}, state.selected.ids);
+  const seq = ++sendSeq;
+  sending = true;
+  abortController = new AbortController();
+  info.textContent = '发送中…（点击「取消」中止）';
+  updateEditButtons();
 
   try {
-    const data = await apiSend(payload);
-    state.response = data;
+    const data = await apiSend(payload, { signal: abortController.signal });
+    // Drop responses that no longer belong to the current selection.
+    if (seq !== sendSeq || !sameIds(state.selected && state.selected.ids, targetIds)) {
+      return;
+    }
+    state.response = Object.assign({}, data, { _ids: targetIds });
     renderResponse();
     info.textContent = data.error ? '失败' : (data.status + ' · ' + (data.durationMs != null ? data.durationMs : 0) + 'ms');
+    if (data.truncated) toast('响应超过 16 MB，已截断显示', true);
     if (data.error) toast(data.error, true);
   } catch (error) {
-    state.response = { error: error.message };
+    if (error.name === 'AbortError') {
+      if (seq === sendSeq) {
+        info.textContent = '已取消';
+        toast('已取消请求');
+      }
+      return;
+    }
+    if (seq !== sendSeq) return;
+    state.response = { error: error.message, _ids: targetIds };
     renderResponse();
     info.textContent = '失败';
     toast('请求出错: ' + error.message, true);
   } finally {
-    updateEditButtons();
+    if (seq === sendSeq) {
+      sending = false;
+      abortController = null;
+      updateEditButtons();
+    }
   }
+}
+
+// sameIds reports whether two id bundles identify the same request sample.
+function sameIds(a, b) {
+  if (!a || !b) return false;
+  return a.pid === b.pid && a.sid === b.sid && a.oid === b.oid && a.cid === b.cid;
 }
 
 async function saveCurrentCall() {

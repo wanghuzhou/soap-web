@@ -143,8 +143,39 @@ checkTrue('highlightXML never emits raw <script', !/<script/i.test(highlighted),
 
 // Round-trip: stripping spans must recover the escaped original.
 const stripped = highlighted.replace(/<span class="[^"]*">|<\/span>/g, '');
-const escaped = xss.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const escaped = xss.replace(/[&<>"']/g, (ch) => ({
+  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+}[ch]));
 check('highlightXML round-trips', stripped, escaped);
+
+// Regression: comments and CDATA used to be wrapped first and then re-matched
+// by the tag regex, producing nested spans and broken colouring.
+const commentWithTag = '<!-- 注释里有 <foo> 标签 --><r>1</r>';
+const commentHtml = highlightXML(commentWithTag);
+checkTrue(
+  'highlightXML does not nest tags inside a comment',
+  !/x-comment">[^<]*<span/.test(commentHtml),
+  commentHtml,
+);
+const cdataHtml = highlightXML('<r><![CDATA[a < b & c]]></r>');
+checkTrue('highlightXML does not nest tags inside CDATA',
+  !/x-cdata">[^<]*<span/.test(cdataHtml), cdataHtml);
+
+// Attributes must still be coloured after escaping quotes.
+const attrHtml = highlightXML('<r a="1" b=\'2\'>x</r>');
+checkTrue('highlightXML colours double-quoted attributes',
+  attrHtml.includes('<span class="x-attr">a</span>=<span class="x-val">&quot;1&quot;</span>'), attrHtml);
+checkTrue('highlightXML colours single-quoted attributes',
+  attrHtml.includes('<span class="x-attr">b</span>=<span class="x-val">&#39;2&#39;</span>'), attrHtml);
+
+// Regression: the old tag regex backtracked quadratically on a "<" followed by
+// a long word-character run with no closing ">". It must now be linear, so a
+// large pathological input completes quickly.
+const backtrackBait = '<' + 'a'.repeat(64000);
+const baitStart = performance.now();
+highlightXML(backtrackBait);
+const baitMs = performance.now() - baitStart;
+checkTrue('highlightXML is linear on unclosed tags', baitMs < 200, `took ${baitMs.toFixed(1)} ms`);
 
 // ---- formatSize ------------------------------------------------------------
 check('formatSize zero', formatSize(0), '0 B');

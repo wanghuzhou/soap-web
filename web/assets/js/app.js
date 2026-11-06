@@ -6,7 +6,7 @@ import { apiGet, apiHealth, apiJSON, apiUpload } from './api.js';
 import { toast } from './toast.js';
 import { initTheme } from './theme.js';
 import { initTree, renderTree } from './tree.js';
-import { initEditor, loadNode, updateEditButtons } from './editor.js';
+import { initEditor, loadNode, updateEditButtons, isDirty } from './editor.js';
 import { initResponse } from './response.js';
 import { initProxy } from './proxy.js';
 import { initLayout } from './layout.js';
@@ -77,6 +77,22 @@ async function reload() {
     if (selected.kind === 'call') {
       const found = findCall(selected.ids);
       if (found) {
+        // reload() runs after many unrelated actions (adding a service,
+        // deleting an operation, saving proxy settings). Re-loading the same
+        // sample would overwrite the user's in-progress edits with the server
+        // copy, silently discarding unsaved XML. When the editor is dirty we
+        // keep the user's text and only refresh the tree and selection state.
+        if (isDirty()) {
+          state.selected = {
+            kind: 'call',
+            node: found.call,
+            ids: selected.ids,
+            parentOp: found.operation,
+          };
+          updateEditButtons();
+          renderTree();
+          return;
+        }
         loadNode(found.call, 'call', { ids: selected.ids, parentOp: found.operation });
         return;
       }

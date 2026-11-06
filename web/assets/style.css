@@ -29,6 +29,14 @@
   --red: #f85149;
   --danger-text: #ff9b94;
   --amber: #d29922;
+  /* Soft tints derived from the semantic colours above. Deriving them keeps
+     light and dark themes consistent: a hard-coded dark rgba used as a
+     background on a white surface is invisible, and a hard-coded dark text
+     colour on white fails contrast outright. */
+  --green-soft: color-mix(in srgb, var(--green) 14%, transparent);
+  --red-soft: color-mix(in srgb, var(--red) 14%, transparent);
+  --amber-soft: color-mix(in srgb, var(--amber) 14%, transparent);
+  --logo-grad-from: #5b9bff;
 
   /* XML syntax */
   --x-tag: #7ee787;
@@ -76,6 +84,7 @@
   --red: #cf222e;
   --danger-text: #b42318;
   --amber: #9a6700;
+  --logo-grad-from: #6ea8ff;
   --x-tag: #116329;
   --x-attr: #0550ae;
   --x-val: #0a3069;
@@ -130,7 +139,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   display: grid; place-items: center;
   flex: none;
   border-radius: 8px;
-  background: linear-gradient(135deg, #5b9bff, var(--accent-hover));
+  background: linear-gradient(135deg, var(--logo-grad-from), var(--accent-hover));
   color: #fff;
   font-size: 15px;
   font-weight: 800;
@@ -224,10 +233,10 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .status-badge .dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--green);
-  box-shadow: 0 0 0 3px rgba(63, 185, 80, .12);
+  box-shadow: 0 0 0 3px var(--green-soft);
 }
-.status-badge.is-error { color: var(--red); border-color: rgba(248, 81, 73, .35); }
-.status-badge.is-error .dot { background: var(--red); box-shadow: 0 0 0 3px rgba(248, 81, 73, .12); }
+.status-badge.is-error { color: var(--red); border-color: var(--red-soft); }
+.status-badge.is-error .dot { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
 
 /* ---------- Workspace ---------- */
 .workspace {
@@ -396,7 +405,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   line-height: 1;
 }
 .mini:hover { color: var(--text); border-color: var(--scroll-thumb-hover); }
-.mini.danger:hover { color: var(--red); border-color: rgba(248, 81, 73, .45); }
+.mini.danger:hover { color: var(--red); border-color: var(--red-soft); }
 .mini.more { padding: 0 7px; font-size: 13px; letter-spacing: 1px; }
 .mini.more[aria-expanded="true"] {
   color: var(--text);
@@ -451,7 +460,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .row-menu-item:focus-visible { background: var(--accent-soft); color: var(--sel-text); outline: none; }
 .row-menu-item.danger { color: var(--danger-text); }
 .row-menu-item.danger:hover,
-.row-menu-item.danger:focus-visible { background: rgba(248, 81, 73, .12); color: var(--red); }
+.row-menu-item.danger:focus-visible { background: var(--red-soft); color: var(--red); }
 .row-menu-sep { height: 1px; margin: 4px 6px; background: var(--border-soft); }
 
 /* ---------- Request meta ---------- */
@@ -627,9 +636,9 @@ body.resizing { cursor: col-resize; user-select: none; }
   font-size: 11px;
   font-weight: 600;
 }
-.status-pill.ok { color: var(--green); background: rgba(63, 185, 80, .12); }
-.status-pill.err { color: var(--red); background: rgba(248, 81, 73, .12); }
-.status-pill.warn { color: var(--amber); background: rgba(210, 153, 34, .12); }
+.status-pill.ok { color: var(--green); background: var(--green-soft); }
+.status-pill.err { color: var(--red); background: var(--red-soft); }
+.status-pill.warn { color: var(--amber); background: var(--amber-soft); }
 .meta-item { color: var(--text-dim); font-family: var(--mono); font-size: 11px; }
 
 .resp-body {
@@ -759,7 +768,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   transform: translateX(-50%);
   animation: toast-in .18s ease-out;
 }
-.toast.err { border-color: rgba(248, 81, 73, .5); color: #ffb4ae; }
+.toast.err { border-color: var(--red-soft); color: var(--danger-text); }
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, 6px); }
   to { opacity: 1; transform: translate(-50%, 0); }

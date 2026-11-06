@@ -7,6 +7,8 @@ import { findProject } from './state.js';
 
 let editingProjectID = null;
 let reloadHandler = async () => {};
+let lastFocus = null;
+let saving = false;
 
 export function proxyLabel(proxy) {
   if (!proxy || !proxy.mode || proxy.mode === 'system') return '系统';
@@ -37,6 +39,11 @@ export function openProxyDialog(projectID) {
   const project = findProject(projectID);
   if (!project) return;
 
+  // Remember where focus came from so closing the dialog can restore it. The
+  // tree is re-rendered on save, which destroys the original button, so the
+  // restore is best-effort and falls back to a stable element.
+  lastFocus = document.activeElement;
+
   editingProjectID = projectID;
   $('proxyProjectName').textContent = '工程：' + (project.name || '');
   const proxy = project.proxy || { mode: 'system' };
@@ -51,12 +58,24 @@ export function openProxyDialog(projectID) {
   $('proxyPass').value = proxy.password || '';
   updateProxyCustomVisibility();
   $('proxyOverlay').classList.remove('hidden');
-  $('proxyHost').focus();
+
+  // Focus something that is actually visible. #proxyHost lives inside
+  // #proxyCustom, which is display:none unless mode is "custom"; focusing a
+  // hidden element is a no-op and would leave focus outside an aria-modal.
+  const target = mode === 'custom'
+    ? $('proxyHost')
+    : (document.querySelector('input[name="proxyMode"]:checked') || $('proxySave'));
+  if (target) target.focus();
 }
 
 function closeProxyDialog() {
   $('proxyOverlay').classList.add('hidden');
   editingProjectID = null;
+  // Restore focus if the originating element still exists; otherwise move it
+  // somewhere sane instead of leaving it on <body>.
+  const back = lastFocus && lastFocus.isConnected ? lastFocus : $('btnNewProject');
+  lastFocus = null;
+  if (back && back.focus) back.focus();
 }
 
 function updateProxyCustomVisibility() {
@@ -80,7 +99,7 @@ function readProxyForm() {
 }
 
 async function saveProxy() {
-  if (!editingProjectID) return;
+  if (!editingProjectID || saving) return;
   const project = findProject(editingProjectID);
   if (!project) return;
 
@@ -90,12 +109,22 @@ async function saveProxy() {
     if (!proxy.port) { toast('请填写代理端口', true); return; }
   }
 
+  const saveBtn = $('proxySave');
+  saving = true;
+  saveBtn.disabled = true;
   try {
-    await apiJSON('PUT', '/api/projects/' + encodeURIComponent(project.id), { ...project, proxy });
-    await reloadHandler();
+    // Narrow endpoint: only the proxy field is written. Sending the whole
+    // project would overwrite concurrent changes made in another tab.
+    await apiJSON('PUT', '/api/projects/' + encodeURIComponent(project.id) + '/proxy', proxy);
+    // Close the dialog before reloading: reload re-renders the tree, which
+    // destroys the button that opened the dialog and breaks focus restore.
     closeProxyDialog();
+    await reloadHandler();
     toast('代理设置已保存');
   } catch (error) {
     toast('保存失败: ' + error.message, true);
+  } finally {
+    saving = false;
+    saveBtn.disabled = false;
   }
 }
