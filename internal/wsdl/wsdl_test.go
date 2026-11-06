@@ -89,7 +89,8 @@ func TestParseCalc(t *testing.T) {
 	}
 	req := op.Request
 	t.Logf("generated request:\n%s", req)
-	for _, want := range []string{"<Add>", "<intA>", "<intB>", "</Add>"} {
+	// Elements are namespace-qualified with the tns: prefix; body is enveloped.
+	for _, want := range []string{"<soapenv:Envelope", "<soapenv:Body>", `<tns:Add xmlns:tns="http://tempuri.org/">`, "<tns:intA>", "<tns:intB>", "</tns:Add>"} {
 		if !strings.Contains(req, want) {
 			t.Errorf("request missing %q:\n%s", want, req)
 		}
@@ -101,7 +102,7 @@ func TestNestedComplexType(t *testing.T) {
 	idx := newSchemaIndex(parseSchemasForTest(t, calcWSDL))
 	out := idx.buildRequest("Person", "http://tempuri.org/")
 	t.Logf("person request:\n%s", out)
-	for _, want := range []string{"<name>", "<age>", "<address", "<street>", "<city>", `country=""`} {
+	for _, want := range []string{"<tns:name>", "<tns:age>", "<tns:address", "<tns:street>", "<tns:city>", `country=""`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
