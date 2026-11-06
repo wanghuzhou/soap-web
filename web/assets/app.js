@@ -178,12 +178,31 @@ function normalizeNewlines(s) {
 // sel = { kind, ids:{pid,sid,oid,cid}, node, parentOp }
 function loadNode(node, kind, path) {
   state.selected = { kind, node, ids: path.ids || {}, parentOp: path.parentOp || null };
+  const parentOp = path.parentOp || null;
+
+  // Selecting a service or operation shows only its header. The request editor
+  // stays empty because there is no concrete request sample to display yet
+  // (only a request sample "call" carries actual request data).
+  if (kind === 'svc' || kind === 'op') {
+    let title;
+    if (kind === 'svc') title = '服务：' + (node.name || '');
+    else {
+      const n = (node.calls && node.calls.length) ? node.calls.length : 0;
+      title = '操作：' + (node.name || '') + (n ? ('  ·  ' + n + ' 个请求，请选择一个请求样例查看报文') : '  ·  暂无请求样例');
+    }
+    $('reqTitle').textContent = title;
+    $('endpoint').value = '';
+    $('soapAction').value = '';
+    setRequestBody('', false);
+    updateEditButtons();
+    renderTree();
+    return;
+  }
+
   let title = '';
-  if (kind === 'op') title = node.name || '';
-  else if (kind === 'call') title = (node.title || '请求') + (path.parentOp ? '  ·  ' + (path.parentOp.name || '') : '');
+  if (kind === 'call') title = (node.title || '请求') + (parentOp ? '  ·  ' + (parentOp.name || '') : '');
   else title = (node.name || '') + '  · 测试步骤';
   $('reqTitle').textContent = title;
-  const parentOp = path.parentOp || null;
   $('endpoint').value = node.endpoint || (parentOp && parentOp.endpoint) || '';
   $('soapAction').value = node.soapAction || node.action || (parentOp && parentOp.soapAction) || '';
   const autoFmt = $('autoFormat') ? $('autoFormat').checked : true;
@@ -192,13 +211,15 @@ function loadNode(node, kind, path) {
   renderTree();
 }
 
-// Enable/disable the save/delete buttons depending on what's selected.
+// Enable/disable the save/delete/send buttons depending on what's selected.
 function updateEditButtons() {
   const sel = state.selected;
   const canSave = sel && sel.kind === 'call';
   const canDelete = sel && (sel.kind === 'call' || sel.kind === 'op' || sel.kind === 'svc');
+  const canSend = sel && sel.kind === 'call';
   $('btnSaveCall').disabled = !canSave;
   $('btnDeleteNode').disabled = !canDelete;
+  if ($('btnSend')) $('btnSend').disabled = !canSend;
 }
 
 function esc(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
@@ -574,6 +595,10 @@ function fmtSize(n) {
 
 /* ---------------- Send ---------------- */
 async function send() {
+  if (!state.selected || state.selected.kind !== 'call') {
+    toast('请先在工程树中选择一个请求样例', true);
+    return;
+  }
   const url = $('endpoint').value.trim();
   if (!url) { toast('请先填写 Endpoint', true); return; }
   const ct = $('contentType').value;
