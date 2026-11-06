@@ -4,6 +4,7 @@ package model
 // Project is the root container. It mirrors the structure of a SoapUI project
 // closely enough for import, while staying simple for our own needs.
 type Project struct {
+	ID         string      `json:"id"` // stable identifier for CRUD
 	Name       string      `json:"name"`
 	Source     string      `json:"source"` // e.g. "soapui" or "native"
 	Services   []Service   `json:"services"`
@@ -12,6 +13,7 @@ type Project struct {
 
 // Service represents a WSDL-described interface (a SoapUI "interface").
 type Service struct {
+	ID         string      `json:"id"`
 	Name       string      `json:"name"`
 	Wsdl       string      `json:"wsdl"` // local path or URL
 	Operations []Operation `json:"operations"`
@@ -23,6 +25,7 @@ type Service struct {
 // multiple named requests per operation, each with its own parameters). These
 // live in Calls. Request mirrors the first call for convenience.
 type Operation struct {
+	ID         string `json:"id"`
 	Name       string `json:"name"`
 	SoapAction string `json:"soapAction"`
 	Endpoint   string `json:"endpoint"`
@@ -35,6 +38,7 @@ type Operation struct {
 
 // Call is a named saved request sample within an operation (a SoapUI <con:call>).
 type Call struct {
+	ID       string `json:"id"`
 	Title    string `json:"title"` // e.g. "5.6.5 物价查询(药品等)"
 	Endpoint string `json:"endpoint"`
 	Action   string `json:"action"`

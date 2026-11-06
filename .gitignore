@@ -1,7 +1,10 @@
-﻿# Build artifacts
+# Build artifacts
 *.exe
 /bin/
 /dist/
+
+# User data (persisted projects)
+/data/
 
 # OS / editor
 .DS_Store

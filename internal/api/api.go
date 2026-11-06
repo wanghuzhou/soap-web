@@ -4,12 +4,14 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
-	"os"
+	"strings"
 
 	"soapweb/internal/model"
 	"soapweb/internal/soapuiproj"
+	"soapweb/internal/store"
 	"soapweb/internal/transport"
 	"soapweb/internal/wsdl"
 )
@@ -18,6 +20,8 @@ import (
 type Server struct {
 	// StaticFS is the embedded frontend filesystem (rooted at web/).
 	StaticFS http.FileSystem
+	// Store persists imported and user-created projects.
+	Store *store.Store
 }
 
 // Register attaches all routes to mux.
@@ -26,6 +30,10 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/api/send", s.handleSend)
 	mux.HandleFunc("/api/import/soapui", s.handleImportSoapUI)
 	mux.HandleFunc("/api/wsdl/parse", s.handleParseWSDL)
+
+	// Project & nested CRUD.
+	mux.HandleFunc("/api/projects", s.handleProjects)     // GET list, POST create
+	mux.HandleFunc("/api/projects/", s.handleProjectItem) // /{pid} and nested paths
 	mux.Handle("/", http.FileServer(s.StaticFS))
 }
 
@@ -61,8 +69,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, transport.Send(req))
 }
 
-// handleImportSoapUI accepts an uploaded SoapUI project xml (multipart field
-// "file" or raw body) and returns the parsed project model.
+// handleImportSoapUI parses an uploaded SoapUI project and persists it.
 func (s *Server) handleImportSoapUI(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
@@ -81,17 +88,22 @@ func (s *Server) handleImportSoapUI(w http.ResponseWriter, r *http.Request) {
 	if proj.Name == "" {
 		proj.Name = name
 	}
-	writeJSON(w, http.StatusOK, proj)
+	saved, err := s.Store.AddProject(*proj)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "保存工程失败: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
 }
 
-// handleParseWSDL accepts a WSDL (upload field "file", or a "url"/"text" form
-// value) and returns the parsed service with generated request templates.
+// handleParseWSDL parses a WSDL and, if a "save" hint is given, persists it as
+// a new project containing a single service.
 func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeErr(w, http.StatusMethodNotAllowed, "仅支持 POST")
 		return
 	}
-	data, _, err := readUpload(r)
+	data, name, err := readUpload(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
@@ -101,7 +113,33 @@ func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "解析 WSDL 失败: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, svc)
+	// Persist as a new project so the parse result survives a refresh.
+	svcName := svc.Name
+	if svcName == "" {
+		svcName = name
+	}
+	proj := model.Project{
+		Name:   svcName,
+		Source: "wsdl",
+		Services: []model.Service{{
+			Name:       svcName,
+			Wsdl:       name,
+			Operations: svc.Operations,
+		}},
+	}
+	if proj.Name == "" {
+		proj.Name = "WSDL 工程"
+	}
+	saved, err := s.Store.AddProject(proj)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "保存 WSDL 工程失败: "+err.Error())
+		return
+	}
+	// Return both the raw parse result (for immediate UI use) and the saved project.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"service": svc,
+		"project": saved,
+	})
 }
 
 // readUpload extracts the raw bytes from a multipart "file" field, or from the
@@ -124,5 +162,23 @@ func readUpload(r *http.Request) ([]byte, string, error) {
 	return b, "", err
 }
 
-// LoadFile is a helper for the CLI: read a project/ wsdl from disk.
-func LoadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+// mapStoreErr converts store errors into appropriate HTTP responses.
+func mapStoreErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, store.ErrNotFound) {
+		writeErr(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeErr(w, http.StatusInternalServerError, err.Error())
+}
+
+// splitPath splits "/a/b/c" into ["a","b","c"] (ignoring empty segments).
+func splitPath(p string) []string {
+	parts := strings.Split(strings.Trim(p, "/"), "/")
+	out := parts[:0]
+	for _, s := range parts {
+		if s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}

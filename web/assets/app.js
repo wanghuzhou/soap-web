@@ -4,8 +4,8 @@
 const $ = (id) => document.getElementById(id);
 
 const state = {
-  project: null,       // parsed project (native shape from backend)
-  selected: null,      // { kind:'op'|'step', node }
+  projects: [],        // all persisted projects (from /api/projects)
+  selected: null,      // { kind, node, ids:{pid,sid,oid,cid}, parentOp }
   response: null,
   view: 'pretty',
 };
@@ -161,58 +161,128 @@ function normalizeNewlines(s) {
 }
 
 /* ---------------- Request fields ---------------- */
-function loadNode(node, kind, parentOp) {
-  state.selected = { kind, node };
+// Selection carries the full id path so edits/deletes can address the server.
+// sel = { kind, ids:{pid,sid,oid,cid}, node, parentOp }
+function loadNode(node, kind, path) {
+  state.selected = { kind, node, ids: path.ids || {}, parentOp: path.parentOp || null };
   let title = '';
   if (kind === 'op') title = node.name || '';
-  else if (kind === 'call') title = (node.title || '请求') + (parentOp ? '  ·  ' + (parentOp.name || '') : '');
+  else if (kind === 'call') title = (node.title || '请求') + (path.parentOp ? '  ·  ' + (path.parentOp.name || '') : '');
   else title = (node.name || '') + '  · 测试步骤';
   $('reqTitle').textContent = title;
+  const parentOp = path.parentOp || null;
   $('endpoint').value = node.endpoint || (parentOp && parentOp.endpoint) || '';
   $('soapAction').value = node.soapAction || node.action || (parentOp && parentOp.soapAction) || '';
   const autoFmt = $('autoFormat') ? $('autoFormat').checked : true;
   setRequestBody(node.request || '', autoFmt);
+  updateEditButtons();
   renderTree();
 }
 
-/* ---------------- Tree ---------------- */
+// Enable/disable the save/delete buttons depending on what's selected.
+function updateEditButtons() {
+  const sel = state.selected;
+  const canSave = sel && sel.kind === 'call';
+  const canDelete = sel && (sel.kind === 'call' || sel.kind === 'op' || sel.kind === 'svc');
+  $('btnSaveCall').disabled = !canSave;
+  $('btnDeleteNode').disabled = !canDelete;
+}
+
+function esc(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
+
+/* ---------------- API helpers ---------------- */
+async function apiGet(url) {
+  const r = await fetch(url);
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || ('请求失败 ' + r.status));
+  return d;
+}
+async function apiJSON(method, url, body) {
+  const r = await fetch(url, {
+    method,
+    headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || ('请求失败 ' + r.status));
+  return d;
+}
+
+/* ---------------- Projects loading ---------------- */
+async function loadProjects(selectFirst) {
+  try {
+    const list = await apiGet('/api/projects');
+    state.projects = list || [];
+    renderTree();
+    if (selectFirst && state.projects.length) {
+      const p = state.projects[0];
+      const svc = (p.services || [])[0];
+      const op = svc && (svc.operations || [])[0];
+      if (op && op.calls && op.calls.length) {
+        loadNode(op.calls[0], 'call', { ids: { pid: p.id, sid: svc.id, oid: op.id, cid: op.calls[0].id }, parentOp: op });
+      } else if (op) {
+        loadNode(op, 'op', { ids: { pid: p.id, sid: svc.id, oid: op.id } });
+      }
+    }
+  } catch (e) {
+    toast('加载工程失败: ' + e.message, true);
+  }
+}
+
+/* ---------------- Tree (multi-project, with CRUD) ---------------- */
 function renderTree() {
   const tree = $('tree');
-  if (!state.project) return;
-  const p = state.project;
-  let html = '';
-
-  const hasServices = p.services && p.services.length;
-  const hasSuites = p.testSuites && p.testSuites.length;
-  if (!hasServices && !hasSuites) {
-    tree.innerHTML = '<div class="empty-hint">工程为空。</div>';
+  const projects = state.projects || [];
+  if (!projects.length) {
+    tree.innerHTML = '<div class="empty-hint">还没有工程。<br>点击顶部「导入 SoapUI 工程」或「解析 WSDL」新增。</div>';
     return;
   }
+  const sel = state.selected;
+  let html = '';
 
-  (p.services || []).forEach((svc) => {
-    html += `<div class="tree-group"><div class="tree-node"><span class="ico">▸</span>${escapeHtml(svc.name || 'service')}<span class="tag">service</span></div>`;
-    (svc.operations || []).forEach((op, i) => {
-      const opSel = state.selected && state.selected.kind === 'op' && state.selected.node === op ? ' selected' : '';
-      html += `<div class="tree-node op${opSel}" data-kind="op" data-svc="${esc(svc.name)}" data-idx="${i}">
-        <span class="ico">◇</span>${escapeHtml(op.name || 'operation')}<span class="tag">${(op.calls && op.calls.length) ? op.calls.length + ' 请求' : 'op'}</span></div>`;
-      // Each saved call is a titled request sample nested under the operation.
-      (op.calls || []).forEach((call, ci) => {
-        const cSel = state.selected && state.selected.kind === 'call' && state.selected.node === call ? ' selected' : '';
-        html += `<div class="tree-node op${cSel}" style="padding-left:32px" data-kind="call" data-svc="${esc(svc.name)}" data-idx="${i}" data-cidx="${ci}">
-          <span class="ico">▸</span><span class="call-title">${escapeHtml(call.title || '请求')}</span></div>`;
-      });
-    });
-    html += `</div>`;
-  });
+  projects.forEach((p) => {
+    html += `<div class="tree-group">
+      <div class="tree-node proj" data-kind="proj">
+        <span class="ico">▾</span>${escapeHtml(p.name || '工程')}
+        <span class="tag">${(p.source || 'native')}</span>
+        <span class="node-actions">
+          <button class="mini" title="新建服务" data-act="add-svc" data-pid="${p.id}">+服务</button>
+          <button class="mini danger" title="删除工程" data-act="del-proj" data-pid="${p.id}">✕</button>
+        </span>
+      </div>`;
 
-  (p.testSuites || []).forEach((ts) => {
-    html += `<div class="tree-group"><div class="tree-node"><span class="ico">▸</span>${escapeHtml(ts.name || 'TestSuite')}<span class="tag">suite</span></div>`;
-    (ts.testCases || []).forEach((tc) => {
-      html += `<div class="tree-node op" style="opacity:.85"><span class="ico">▸</span>${escapeHtml(tc.name || 'TestCase')}<span class="tag">case</span></div>`;
-      (tc.steps || []).forEach((st, i) => {
-        const sel = state.selected && state.selected.kind === 'step' && state.selected.node === st ? ' selected' : '';
-        html += `<div class="tree-node op${sel}" style="padding-left:34px" data-kind="step" data-ts="${esc(ts.name)}" data-tc="${esc(tc.name)}" data-idx="${i}">
-          <span class="ico">▸</span>${escapeHtml(st.name || 'step')}<span class="tag">${esc(st.type || 'step')}</span></div>`;
+    (p.services || []).forEach((svc) => {
+      const svcSel = sel && sel.kind === 'svc' && sel.ids.sid === svc.id ? ' selected' : '';
+      html += `<div class="tree-node svc${svcSel}" style="padding-left:20px" data-kind="svc" data-pid="${p.id}" data-sid="${svc.id}">
+        <span class="ico">▸</span>${escapeHtml(svc.name || 'service')}
+        <span class="tag">service</span>
+        <span class="node-actions">
+          <button class="mini" title="新建操作" data-act="add-op" data-pid="${p.id}" data-sid="${svc.id}">+操作</button>
+          <button class="mini danger" title="删除服务" data-act="del-svc" data-pid="${p.id}" data-sid="${svc.id}">✕</button>
+        </span>
+      </div>`;
+
+      (svc.operations || []).forEach((op) => {
+        const opSel = sel && sel.kind === 'op' && sel.ids.oid === op.id ? ' selected' : '';
+        const cnt = (op.calls && op.calls.length) ? op.calls.length + ' 请求' : 'op';
+        html += `<div class="tree-node op${opSel}" style="padding-left:38px" data-kind="op" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">
+          <span class="ico">◇</span>${escapeHtml(op.name || 'operation')}<span class="tag">${cnt}</span>
+          <span class="node-actions">
+            <button class="mini" title="新建请求样例" data-act="add-call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">+请求</button>
+            <button class="mini danger" title="删除操作" data-act="del-op" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">✕</button>
+          </span>
+        </div>`;
+
+        (op.calls || []).forEach((call) => {
+          const cSel = sel && sel.kind === 'call' && sel.ids.cid === call.id ? ' selected' : '';
+          html += `<div class="tree-node op${cSel}" style="padding-left:56px" data-kind="call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}" data-cid="${call.id}">
+            <span class="ico">▸</span><span class="call-title">${escapeHtml(call.title || '请求')}</span>
+            <span class="node-actions">
+              <button class="mini" title="重命名" data-act="rename-call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}" data-cid="${call.id}">✎</button>
+              <button class="mini danger" title="删除请求" data-act="del-call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}" data-cid="${call.id}">✕</button>
+            </span>
+          </div>`;
+        });
       });
     });
     html += `</div>`;
@@ -220,28 +290,181 @@ function renderTree() {
 
   tree.innerHTML = html;
 
-  tree.querySelectorAll('.tree-node[data-kind="op"]').forEach((elm) => {
-    elm.addEventListener('click', () => {
-      const svc = (state.project.services || []).find((s) => s.name === elm.dataset.svc);
-      if (svc && svc.operations) loadNode(svc.operations[+elm.dataset.idx], 'op');
+  // Clicking a node selects it (but clicking a button does the action).
+  tree.querySelectorAll('.tree-node').forEach((elm) => {
+    elm.addEventListener('click', (ev) => {
+      if (ev.target.closest('.node-actions')) return; // button handled separately
+      const d = elm.dataset;
+      const proj = projects.find((x) => x.id === d.pid);
+      if (!proj) return;
+      if (d.kind === 'svc') {
+        const svc = (proj.services || []).find((s) => s.id === d.sid);
+        if (svc) loadNode(svc, 'svc', { ids: { pid: d.pid, sid: d.sid } });
+      } else if (d.kind === 'op') {
+        const svc = (proj.services || []).find((s) => s.id === d.sid);
+        const op = svc && (svc.operations || []).find((o) => o.id === d.oid);
+        if (op) loadNode(op, 'op', { ids: { pid: d.pid, sid: d.sid, oid: d.oid } });
+      } else if (d.kind === 'call') {
+        const svc = (proj.services || []).find((s) => s.id === d.sid);
+        const op = svc && (svc.operations || []).find((o) => o.id === d.oid);
+        const call = op && (op.calls || []).find((c) => c.id === d.cid);
+        if (call) loadNode(call, 'call', { ids: { pid: d.pid, sid: d.sid, oid: d.oid, cid: d.cid }, parentOp: op });
+      }
     });
   });
-  tree.querySelectorAll('.tree-node[data-kind="call"]').forEach((elm) => {
-    elm.addEventListener('click', () => {
-      const svc = (state.project.services || []).find((s) => s.name === elm.dataset.svc);
-      const op = svc && (svc.operations || [])[+elm.dataset.idx];
-      if (op && op.calls) loadNode(op.calls[+elm.dataset.cidx], 'call', op);
-    });
-  });
-  tree.querySelectorAll('.tree-node[data-kind="step"]').forEach((elm) => {
-    elm.addEventListener('click', () => {
-      const ts = (state.project.testSuites || []).find((t) => t.name === elm.dataset.ts);
-      const tc = ts && (ts.testCases || []).find((c) => c.name === elm.dataset.tc);
-      if (tc && tc.steps) loadNode(tc.steps[+elm.dataset.idx], 'step');
+
+  // Action buttons.
+  tree.querySelectorAll('.node-actions button[data-act]').forEach((btn) => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      handleTreeAction(btn.dataset, btn);
     });
   });
 }
-function esc(s) { return String(s == null ? '' : s).replace(/"/g, '&quot;'); }
+
+/* ---------------- Tree CRUD actions ---------------- */
+async function handleTreeAction(d, btn) {
+  const act = d.act;
+  try {
+    if (act === 'add-svc') {
+      const name = prompt('新服务名称：', 'NewService');
+      if (name == null) return;
+      await apiJSON('POST', `/api/projects/${d.pid}/services`, { name: name || 'Service' });
+      await reload();
+    } else if (act === 'del-svc') {
+      if (!confirm('确定删除该服务及其下所有操作？')) return;
+      await apiJSON('DELETE', `/api/projects/${d.pid}/services/${d.sid}`);
+      await reload();
+    } else if (act === 'add-op') {
+      const name = prompt('新操作名称：', 'NewOperation');
+      if (name == null) return;
+      await apiJSON('POST', `/api/projects/${d.pid}/services/${d.sid}/operations`, { name: name || 'Operation' });
+      await reload();
+    } else if (act === 'del-op') {
+      if (!confirm('确定删除该操作及其下所有请求？')) return;
+      await apiJSON('DELETE', `/api/projects/${d.pid}/services/${d.sid}/operations/${d.oid}`);
+      await reload();
+    } else if (act === 'add-call') {
+      const title = prompt('新请求样例标题：', '新请求');
+      if (title == null) return;
+      const dir = `/api/projects/${d.pid}/services/${d.sid}/operations/${d.oid}/calls`;
+      const created = await apiJSON('POST', dir, { title: title || '新请求', request: '' });
+      await reload();
+      // select the newly created call
+      const proj = (state.projects || []).find((x) => x.id === d.pid);
+      const svc = proj && (proj.services || []).find((s) => s.id === d.sid);
+      const op = svc && (svc.operations || []).find((o) => o.id === d.oid);
+      const call = op && (op.calls || []).find((c) => c.id === created.id);
+      if (call) loadNode(call, 'call', { ids: { pid: d.pid, sid: d.sid, oid: d.oid, cid: call.id }, parentOp: op });
+    } else if (act === 'del-call') {
+      if (!confirm('确定删除该请求样例？')) return;
+      await apiJSON('DELETE', `/api/projects/${d.pid}/services/${d.sid}/operations/${d.oid}/calls/${d.cid}`);
+      await reload();
+    } else if (act === 'rename-call') {
+      const proj = (state.projects || []).find((x) => x.id === d.pid);
+      const svc = proj && (proj.services || []).find((s) => s.id === d.sid);
+      const op = svc && (svc.operations || []).find((o) => o.id === d.oid);
+      const call = op && (op.calls || []).find((c) => c.id === d.cid);
+      const cur = call ? call.title : '';
+      const title = prompt('重命名请求样例：', cur);
+      if (title == null || title === cur) return;
+      const url = `/api/projects/${d.pid}/services/${d.sid}/operations/${d.oid}/calls/${d.cid}`;
+      await apiJSON('PUT', url, { id: d.cid, title, endpoint: call.endpoint, action: call.action, request: call.request });
+      await reload();
+    } else if (act === 'del-proj') {
+      const proj = (state.projects || []).find((x) => x.id === d.pid);
+      if (!confirm('确定删除整个工程「' + ((proj && proj.name) || '') + '」？')) return;
+      await apiJSON('DELETE', `/api/projects/${d.pid}`);
+      await reload();
+    }
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+// Reload project list from server, preserving current selection if possible.
+async function reload() {
+  const sel = state.selected;
+  try {
+    state.projects = await apiGet('/api/projects');
+  } catch (e) {
+    toast(e.message, true);
+    return;
+  }
+  // Try to re-resolve the selected node by id; fall back to clearing.
+  if (sel && sel.kind === 'call' && sel.ids.cid) {
+    const found = findCallById(sel.ids);
+    if (found) { loadNode(found.call, 'call', { ids: sel.ids, parentOp: found.op }); return; }
+  }
+  if (sel && sel.kind === 'op' && sel.ids.oid) {
+    const found = findOpById(sel.ids);
+    if (found) { loadNode(found.op, 'op', { ids: sel.ids }); return; }
+  }
+  if (state.projects.length && !$('requestBody').value) renderTree();
+  else renderTree();
+}
+
+function findCallById(ids) {
+  const p = (state.projects || []).find((x) => x.id === ids.pid);
+  const svc = p && (p.services || []).find((s) => s.id === ids.sid);
+  const op = svc && (svc.operations || []).find((o) => o.id === ids.oid);
+  const call = op && (op.calls || []).find((c) => c.id === ids.cid);
+  return call ? { call, op } : null;
+}
+function findOpById(ids) {
+  const p = (state.projects || []).find((x) => x.id === ids.pid);
+  const svc = p && (p.services || []).find((s) => s.id === ids.sid);
+  const op = svc && (svc.operations || []).find((o) => o.id === ids.oid);
+  return op ? { op } : null;
+}
+
+/* ---------------- Save current request sample ---------------- */
+async function saveCurrentCall() {
+  const sel = state.selected;
+  if (!sel || sel.kind !== 'call') { toast('请先选择一个请求样例', true); return; }
+  const ids = sel.ids;
+  const url = `/api/projects/${ids.pid}/services/${ids.sid}/operations/${ids.oid}/calls/${ids.cid}`;
+  const body = {
+    id: ids.cid,
+    title: sel.node.title || '请求',
+    endpoint: $('endpoint').value.trim(),
+    action: $('soapAction').value.trim(),
+    request: $('requestBody').value,
+  };
+  try {
+    await apiJSON('PUT', url, body);
+    await reload();
+    toast('已保存');
+  } catch (e) {
+    toast('保存失败: ' + e.message, true);
+  }
+}
+
+/* ---------------- Delete current selected node ---------------- */
+async function deleteCurrentNode() {
+  const sel = state.selected;
+  if (!sel) return;
+  const ids = sel.ids;
+  try {
+    if (sel.kind === 'call') {
+      if (!confirm('确定删除该请求样例？')) return;
+      await apiJSON('DELETE', `/api/projects/${ids.pid}/services/${ids.sid}/operations/${ids.oid}/calls/${ids.cid}`);
+    } else if (sel.kind === 'op') {
+      if (!confirm('确定删除该操作及其下所有请求？')) return;
+      await apiJSON('DELETE', `/api/projects/${ids.pid}/services/${ids.sid}/operations/${ids.oid}`);
+    } else if (sel.kind === 'svc') {
+      if (!confirm('确定删除该服务？')) return;
+      await apiJSON('DELETE', `/api/projects/${ids.pid}/services/${ids.sid}`);
+    } else {
+      return;
+    }
+    state.selected = null;
+    await reload();
+    toast('已删除');
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
 
 /* ---------------- Response rendering ---------------- */
 function renderResponse() {
@@ -336,18 +559,12 @@ async function importSoapUI(file) {
     const resp = await fetch('/api/import/soapui', { method: 'POST', body: fd });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || '导入失败');
-    state.project = data;
-    state.selected = null;
-    renderTree();
-    // auto-select first operation if any
-    const svc = (data.services || [])[0];
-    if (svc && svc.operations && svc.operations[0]) {
-      const op = svc.operations[0];
-      // Prefer the first saved call (it carries the titled request sample).
-      if (op.calls && op.calls.length) loadNode(op.calls[0], 'call', op);
-      else loadNode(op, 'op');
-    }
-    toast('已导入工程：' + (data.name || file.name));
+    // Backend persists and returns the saved project.
+    await loadProjects(false);
+    toast('已导入并保存工程：' + (data.name || file.name));
+    // Auto-select first call/op of the imported project.
+    const proj = (state.projects || []).find((x) => x.id === data.id);
+    if (proj) selectFirst(proj);
   } catch (e) {
     toast(e.message, true);
   }
@@ -361,19 +578,25 @@ async function parseWSDL(file) {
     const resp = await fetch('/api/wsdl/parse', { method: 'POST', body: fd });
     const data = await resp.json();
     if (!resp.ok) throw new Error(data.error || 'WSDL 解析失败');
-    // Wrap into a project-like structure so the tree renders.
-    state.project = {
-      name: data.name || file.name,
-      source: 'wsdl',
-      services: [{ name: data.name || 'service', wsdl: '', operations: data.operations }],
-      testSuites: [],
-    };
-    state.selected = null;
-    renderTree();
-    if (data.operations && data.operations[0]) loadNode(data.operations[0], 'op');
-    toast('WSDL 解析完成，生成 ' + (data.operations || []).length + ' 个操作');
+    await loadProjects(false);
+    toast('WSDL 解析完成并已保存工程');
+    if (data.project) {
+      const proj = (state.projects || []).find((x) => x.id === data.project.id);
+      if (proj) selectFirst(proj);
+    }
   } catch (e) {
     toast(e.message, true);
+  }
+}
+
+// Select the first available call (or op) within a project.
+function selectFirst(proj) {
+  const svc = (proj.services || [])[0];
+  const op = svc && (svc.operations || [])[0];
+  if (op && op.calls && op.calls.length) {
+    loadNode(op.calls[0], 'call', { ids: { pid: proj.id, sid: svc.id, oid: op.id, cid: op.calls[0].id }, parentOp: op });
+  } else if (op) {
+    loadNode(op, 'op', { ids: { pid: proj.id, sid: svc.id, oid: op.id } });
   }
 }
 
@@ -399,6 +622,17 @@ window.addEventListener('DOMContentLoaded', () => {
   });
   $('btnImport').addEventListener('click', () => pickFile('soapui'));
   $('btnWsdl').addEventListener('click', () => pickFile('wsdl'));
+  $('btnSaveCall').addEventListener('click', saveCurrentCall);
+  $('btnDeleteNode').addEventListener('click', deleteCurrentNode);
+  $('btnNewProject').addEventListener('click', async () => {
+    const name = prompt('新工程名称：', '新工程');
+    if (name == null) return;
+    try {
+      const p = await apiJSON('POST', '/api/projects', { name: name || '新工程', services: [] });
+      await loadProjects(false);
+      toast('已创建工程：' + p.name);
+    } catch (e) { toast(e.message, true); }
+  });
 
   $('fileInput').addEventListener('change', (e) => {
     const f = e.target.files[0];
@@ -444,6 +678,8 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Initial paint.
+  // Initial paint + load persisted projects.
   syncHighlight();
+  updateEditButtons();
+  loadProjects(true);
 });

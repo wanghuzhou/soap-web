@@ -115,6 +115,23 @@ body {
 }
 .tree-node.op .tag { color: var(--accent); border-color: rgba(79,140,255,.4); }
 .tree-node .call-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-node.proj { font-weight: 600; color: #e7ecf5; }
+.tree-node.svc { color: #cdd6e2; }
+
+/* Per-node action buttons shown on hover */
+.node-actions { display: none; margin-left: auto; gap: 2px; align-items: center; }
+.tree-node:hover .node-actions { display: flex; }
+.mini {
+  font-family: inherit; font-size: 11px; line-height: 1;
+  padding: 3px 6px; border-radius: 5px; cursor: pointer;
+  background: var(--bg-elev); color: var(--text-dim);
+  border: 1px solid var(--border);
+}
+.mini:hover { color: var(--text); border-color: #3a4657; }
+.mini.danger:hover { color: var(--red); border-color: rgba(248,81,73,.5); }
+.btn.danger-text { color: #ff9b94; }
+.btn.danger-text:disabled { color: var(--text-dim); opacity: .45; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
 
 /* ---------- Request controls ---------- */
 .req-controls { padding: 12px 14px; border-bottom: 1px solid var(--border-soft); flex: none; }
