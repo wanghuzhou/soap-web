@@ -76,6 +76,7 @@ web/assets/js/         前端 ES Modules（无构建步骤）
   layout.js            可拖拽分栏与宽度持久化
 web/selftest/          前端回归自测（不参与 embed，不对外提供）
   xml.selftest.mjs     XML 管线不变量断言
+  tree.selftest.mjs    工程树渲染契约断言（DOM 桩）
 web/embed.go            embed.FS 内嵌资源
 ```
 
@@ -85,9 +86,12 @@ web/embed.go            embed.FS 内嵌资源
 go test ./...                              # 后端单元测试
 go test -race ./...                        # 含数据竞争检测
 node web/selftest/xml.selftest.mjs         # 前端 XML 管线回归自测（需 Node 18+）
+node web/selftest/tree.selftest.mjs        # 工程树渲染契约回归自测（需 Node 18+）
 ```
 
-`xml.selftest.mjs` 直接 import 真实的 ES Modules，覆盖格式化语义保真、换行规整不误伤数据、语法高亮转义等不变量；失败时以非零码退出，可挂到 CI。
+`xml.selftest.mjs` 直接 import 真实的 ES Modules，覆盖格式化语义保真、换行规整不误伤数据、语法高亮转义等不变量。
+`tree.selftest.mjs` 用最小 DOM 桩跑真实的 `tree.js`，断言渲染契约：**结构变更必须 `renderTree()`**、**纯选中变更只能 `syncSelection()`**——两者混用会导致「新建请求后不刷新页面就看不到」或「每次点击都重建整棵树」。
+两个脚本失败时都以非零码退出，可挂到 CI。
 
 ## API
 
