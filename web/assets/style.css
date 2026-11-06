@@ -1,4 +1,4 @@
-﻿:root {
+:root {
   --bg: #0f1115;
   --bg-elev: #171a21;
   --bg-pane: #12151b;
@@ -169,6 +169,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .tree-node:hover { background: var(--border-soft); }
 .tree-node.selected { background: var(--sel-bg); color: var(--sel-text); }
 .tree-node .ico { opacity: .7; font-size: 12px; width: 14px; text-align: center; }
+.tree-node .ico.caret { cursor: pointer; border-radius: 3px; opacity: .85; }
+.tree-node .ico.caret:hover { opacity: 1; background: var(--hover-border); color: var(--text); }
+.tree-node .ico.leaf { opacity: .25; }
 .tree-node.op { padding-left: 22px; }
 .tree-node .tag {
   font-size: 10px; margin-left: auto; color: var(--text-dim);

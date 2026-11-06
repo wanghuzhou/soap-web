@@ -9,7 +9,19 @@ const state = {
   response: null,
   view: 'pretty',
   theme: 'dark',
+  collapsed: {},       // id -> true when collapsed
 };
+
+/* ---------------- Collapse state persistence ---------------- */
+function saveCollapsed() {
+  try { localStorage.setItem('soap-web-collapsed', JSON.stringify(state.collapsed)); } catch (e) { /* ignore */ }
+}
+function initCollapsed() {
+  try {
+    const s = localStorage.getItem('soap-web-collapsed');
+    if (s) state.collapsed = JSON.parse(s) || {};
+  } catch (e) { state.collapsed = {}; }
+}
 
 /* ---------------- Toast ---------------- */
 let toastTimer = null;
@@ -241,10 +253,19 @@ function renderTree() {
   const sel = state.selected;
   let html = '';
 
+  const isCollapsed = (key) => !!state.collapsed[key];
+  // Expand/collapse caret. leaf === true renders a non-clickable spacer.
+  const caret = (key, leaf) => {
+    if (leaf) return '<span class="ico leaf"></span>';
+    const c = isCollapsed(key) ? '▸' : '▾';
+    return `<span class="ico caret" data-toggle="${esc(key)}" title="展开/收起">${c}</span>`;
+  };
+
   projects.forEach((p) => {
+    const pCollapsed = isCollapsed(p.id);
     html += `<div class="tree-group">
-      <div class="tree-node proj" data-kind="proj">
-        <span class="ico">▾</span><span class="lbl">${escapeHtml(p.name || '工程')}</span>
+      <div class="tree-node proj" data-kind="proj" data-pid="${p.id}">
+        ${caret(p.id, false)}<span class="lbl">${escapeHtml(p.name || '工程')}</span>
         <span class="tag">${(p.source || 'native')}</span>
         <span class="node-actions">
           <button class="mini" title="重命名工程" data-act="rename-proj" data-pid="${p.id}">✎</button>
@@ -254,10 +275,12 @@ function renderTree() {
         </span>
       </div>`;
 
-    (p.services || []).forEach((svc) => {
+    if (!pCollapsed) (p.services || []).forEach((svc) => {
       const svcSel = sel && sel.kind === 'svc' && sel.ids.sid === svc.id ? ' selected' : '';
+      const svcCollapsed = isCollapsed(svc.id);
+      const svcLeaf = !(svc.operations && svc.operations.length);
       html += `<div class="tree-node svc${svcSel}" style="padding-left:20px" data-kind="svc" data-pid="${p.id}" data-sid="${svc.id}">
-        <span class="ico">▸</span><span class="lbl">${escapeHtml(svc.name || 'service')}</span>
+        ${caret(svc.id, svcLeaf)}<span class="lbl">${escapeHtml(svc.name || 'service')}</span>
         <span class="tag">service</span>
         <span class="node-actions">
           <button class="mini" title="新建操作" data-act="add-op" data-pid="${p.id}" data-sid="${svc.id}">+操作</button>
@@ -265,21 +288,23 @@ function renderTree() {
         </span>
       </div>`;
 
-      (svc.operations || []).forEach((op) => {
+      if (!svcCollapsed) (svc.operations || []).forEach((op) => {
         const opSel = sel && sel.kind === 'op' && sel.ids.oid === op.id ? ' selected' : '';
         const cnt = (op.calls && op.calls.length) ? op.calls.length + ' 请求' : 'op';
+        const opCollapsed = isCollapsed(op.id);
+        const opLeaf = !(op.calls && op.calls.length);
         html += `<div class="tree-node op${opSel}" style="padding-left:38px" data-kind="op" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">
-          <span class="ico">◇</span><span class="lbl">${escapeHtml(op.name || 'operation')}</span><span class="tag">${cnt}</span>
+          ${caret(op.id, opLeaf)}<span class="lbl">${escapeHtml(op.name || 'operation')}</span><span class="tag">${cnt}</span>
           <span class="node-actions">
             <button class="mini" title="新建请求样例" data-act="add-call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">+请求</button>
             <button class="mini danger" title="删除操作" data-act="del-op" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">✕</button>
           </span>
         </div>`;
 
-        (op.calls || []).forEach((call) => {
+        if (!opCollapsed) (op.calls || []).forEach((call) => {
           const cSel = sel && sel.kind === 'call' && sel.ids.cid === call.id ? ' selected' : '';
           html += `<div class="tree-node op${cSel}" style="padding-left:56px" data-kind="call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}" data-cid="${call.id}">
-            <span class="ico">▸</span><span class="call-title">${escapeHtml(call.title || '请求')}</span>
+            ${caret(call.id, true)}<span class="call-title">${escapeHtml(call.title || '请求')}</span>
             <span class="node-actions">
               <button class="mini" title="重命名" data-act="rename-call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}" data-cid="${call.id}">✎</button>
               <button class="mini danger" title="删除请求" data-act="del-call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}" data-cid="${call.id}">✕</button>
@@ -293,14 +318,31 @@ function renderTree() {
 
   tree.innerHTML = html;
 
+  // Caret click toggles expand/collapse (does not select).
+  tree.querySelectorAll('.ico.caret[data-toggle]').forEach((elm) => {
+    elm.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const key = elm.dataset.toggle;
+      state.collapsed[key] = !state.collapsed[key];
+      saveCollapsed();
+      renderTree();
+    });
+  });
+
   // Clicking a node selects it (but clicking a button does the action).
   tree.querySelectorAll('.tree-node').forEach((elm) => {
     elm.addEventListener('click', (ev) => {
       if (ev.target.closest('.node-actions')) return; // button handled separately
+      if (ev.target.closest('.ico.caret')) return;    // caret handled separately
       const d = elm.dataset;
       const proj = projects.find((x) => x.id === d.pid);
       if (!proj) return;
-      if (d.kind === 'svc') {
+      if (d.kind === 'proj') {
+        // Clicking the project row toggles its collapse.
+        state.collapsed[d.pid] = !state.collapsed[d.pid];
+        saveCollapsed();
+        renderTree();
+      } else if (d.kind === 'svc') {
         const svc = (proj.services || []).find((s) => s.id === d.sid);
         if (svc) loadNode(svc, 'svc', { ids: { pid: d.pid, sid: d.sid } });
       } else if (d.kind === 'op') {
@@ -702,6 +744,9 @@ window.addEventListener('DOMContentLoaded', () => {
   // Theme toggle (persisted).
   initTheme();
   $('btnTheme').addEventListener('click', toggleTheme);
+
+  // Restore tree collapse state.
+  initCollapsed();
 
   // Resizable panes.
   initResizers();
