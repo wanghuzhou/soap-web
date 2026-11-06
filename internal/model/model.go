@@ -75,6 +75,13 @@ type Operation struct {
 	Request    string `json:"request"`   // generated or first saved XML template
 	Template   string `json:"template"`  // pure structural skeleton (no business data), from WSDL
 	Calls      []Call `json:"calls"`     // saved request samples (with titles)
+
+	// Bindings lists every WSDL binding that exposes this operation (for
+	// example "SvcSoap11" and "SvcSoap12"). A WSDL often declares the same
+	// operation twice, once per SOAP version; the parser keeps one entry per
+	// operation and records the alternatives here so the UI can show which
+	// protocols are available instead of listing duplicate rows.
+	Bindings []string `json:"bindings,omitempty"`
 }
 
 // Call is a named saved request sample within an operation (a SoapUI <con:call>).

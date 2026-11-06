@@ -137,10 +137,6 @@ func Parse(data []byte) (*Result, error) {
 	for _, pt := range d.PortTypes {
 		ptByQName[localName(pt.Name)] = pt
 	}
-	bindByQName := map[string]wBinding{}
-	for _, b := range d.Bindings {
-		bindByQName[localName(b.Name)] = b
-	}
 
 	// schema index for element/type resolution
 	idx := newSchemaIndex(d.Schemas)
@@ -157,7 +153,36 @@ func Parse(data []byte) (*Result, error) {
 
 	res := &Result{Name: d.Name, TargetNS: d.TargetNS}
 
-	for bName, b := range bindByQName {
+	// Iterate the declaration order, not a name-keyed map.
+	//
+	// Walking a map made the resulting operation order non-deterministic: the
+	// same WSDL could yield a different ordering on each parse, which showed up
+	// as an unstable project tree and non-reproducible exports.
+	//
+	// A WSDL commonly declares two bindings for one portType (SOAP 1.1 and
+	// SOAP 1.2, sometimes also a plain HTTP binding). Iterating every binding
+	// duplicated each operation once per binding, producing indistinguishable
+	// entries. We therefore keep the first binding that exposes a given
+	// operation and skip later ones, recording the alternatives on the
+	// operation so the UI can still surface them.
+	seenOp := map[string]bool{}
+	// opBindings collects every binding exposing a given operation name, so an
+	// operation carries the full set of protocols it is reachable through.
+	opBindings := map[string][]string{}
+	for _, b := range d.Bindings {
+		for _, bo := range b.Ops {
+			name := localName(b.Name)
+			if name == "" {
+				continue
+			}
+			if list := opBindings[bo.Name]; len(list) == 0 || list[len(list)-1] != name {
+				opBindings[bo.Name] = append(list, name)
+			}
+		}
+	}
+
+	for _, b := range d.Bindings {
+		bName := localName(b.Name)
 		pt := ptByQName[localName(b.Type)]
 		// index portType ops by name
 		ptOps := map[string]wPTOp{}
@@ -169,7 +194,17 @@ func Parse(data []byte) (*Result, error) {
 			bindingStyle = b.SoapBinding[0].Style
 		}
 		for _, bo := range b.Ops {
-			op := model.Operation{Name: bo.Name, Endpoint: endpointByBinding[bName]}
+			// Skip operations already contributed by an earlier binding, but
+			// remember which binding provided them.
+			if seenOp[bo.Name] {
+				continue
+			}
+			seenOp[bo.Name] = true
+			op := model.Operation{
+				Name:     bo.Name,
+				Endpoint: endpointByBinding[bName],
+				Bindings: opBindings[bo.Name],
+			}
 			if len(bo.SoapOp) > 0 {
 				op.SoapAction = bo.SoapOp[0].Action
 				op.Style = bo.SoapOp[0].Style
