@@ -131,7 +131,7 @@ func TestDeleteMissing(t *testing.T) {
 
 func TestAddCallSeedsTemplate(t *testing.T) {
 	s, _ := newTestStore(t)
-	// Operation carries a template + endpoint + action.
+	// Operation carries a structural Template (方案 A) + endpoint + action.
 	p, _ := s.AddProject(model.Project{
 		Name: "p",
 		Services: []model.Service{{
@@ -140,20 +140,21 @@ func TestAddCallSeedsTemplate(t *testing.T) {
 				Name:       "Op",
 				Endpoint:   "http://e",
 				SoapAction: "urn:op",
-				Request:    "<template/>",
+				Request:    "<with-data>business</with-data>",
+				Template:   "<skeleton><a></a></skeleton>",
 			}},
 		}},
 	})
 	svc := p.Services[0]
 	op := svc.Operations[0]
 
-	// Create a call with no request → should inherit template/endpoint/action.
+	// Create a call with no request → should inherit the Template (not Request).
 	c, err := s.AddCall(p.ID, svc.ID, op.ID, model.Call{Title: "new"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Request != "<template/>" {
-		t.Errorf("request not seeded: %q", c.Request)
+	if c.Request != "<skeleton><a></a></skeleton>" {
+		t.Errorf("request not seeded from Template: %q", c.Request)
 	}
 	if c.Endpoint != "http://e" {
 		t.Errorf("endpoint not seeded: %q", c.Endpoint)

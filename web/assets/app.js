@@ -419,10 +419,11 @@ async function handleTreeAction(d, btn) {
       const proj0 = (state.projects || []).find((x) => x.id === d.pid);
       const svc0 = proj0 && (proj0.services || []).find((s) => s.id === d.sid);
       const op0 = svc0 && (svc0.operations || []).find((o) => o.id === d.oid);
-      let template = (op0 && op0.request) || '';
-      if (!template && op0 && op0.calls && op0.calls.length) {
-        template = op0.calls[0].request || '';
-      }
+      // 方案 A: use the pure structural skeleton from the WSDL as the new
+      // request body (no business data). Falls back to op.request only if no
+      // WSDL template is available.
+      let template = (op0 && op0.template) || '';
+      if (!template && op0) template = op0.request || '';
       const created = await apiJSON('POST', dir, {
         title: title || '新请求',
         endpoint: (op0 && op0.endpoint) || '',

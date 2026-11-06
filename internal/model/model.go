@@ -33,6 +33,7 @@ type Operation struct {
 	Use        string `json:"use"`       // literal / encoded
 	InputName  string `json:"inputName"` // wrapper element name, if known
 	Request    string `json:"request"`   // generated or first saved XML template
+	Template   string `json:"template"`  // pure structural skeleton (no business data), from WSDL
 	Calls      []Call `json:"calls"`     // saved request samples (with titles)
 }
 

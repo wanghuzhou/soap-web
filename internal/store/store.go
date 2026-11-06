@@ -245,11 +245,14 @@ func (s *Store) AddCall(projectID, serviceID, opID string, call model.Call) (mod
 		for oi := range svc.Operations {
 			if svc.Operations[oi].ID == opID {
 				op := &svc.Operations[oi]
-				// Seed the new request from the operation's template when the
-				// caller did not provide one, so the user starts with a ready
-				// request body instead of a blank editor.
+				// Seed the new request from the operation's structural template
+				// (方案 A: pure skeleton from WSDL, no business data). Fall back
+				// to op.Request only when no Template exists.
 				if call.Request == "" {
-					call.Request = op.Request
+					call.Request = op.Template
+					if call.Request == "" {
+						call.Request = op.Request
+					}
 					if call.Request == "" && len(op.Calls) > 0 {
 						call.Request = op.Calls[0].Request
 					}

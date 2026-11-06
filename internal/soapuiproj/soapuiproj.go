@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"soapweb/internal/model"
+	"soapweb/internal/wsdl"
 )
 
 // SoapUI project file uses a default namespace plus "con" prefixed names.
@@ -25,10 +26,37 @@ type xmlProject struct {
 }
 
 type xmlInterface struct {
-	Name       string         `xml:"name,attr"`
-	Definition string         `xml:"definition,attr"` // WSDL url/path
-	Endpoints  []xmlEP        `xml:"endpoints>endpoint"`
-	Operations []xmlOperation `xml:"operation"`
+	Name            string         `xml:"name,attr"`
+	Definition      string         `xml:"definition,attr"` // WSDL url/path
+	Endpoints       []xmlEP        `xml:"endpoints>endpoint"`
+	Operations      []xmlOperation `xml:"operation"`
+	DefinitionCache []xmlDefPart   `xml:"definitionCache>part"`
+}
+
+// xmlDefPart is one cached document inside <con:definitionCache>. SoapUI
+// embeds the full WSDL here so it works offline; we reuse it to generate a
+// structural request template (方案 A).
+type xmlDefPart struct {
+	Content string `xml:"content"`
+	Type    string `xml:"type"`
+}
+
+// embeddedWSDL returns the embedded WSDL text (the part typed as wsdl), if any.
+func (xi xmlInterface) embeddedWSDL() string {
+	for _, p := range xi.DefinitionCache {
+		if strings.Contains(p.Type, "wsdl") || strings.Contains(p.Content, "<definitions") {
+			if c := strings.TrimSpace(p.Content); c != "" {
+				return c
+			}
+		}
+	}
+	// Fallback: any non-empty part that looks like XML.
+	for _, p := range xi.DefinitionCache {
+		if c := strings.TrimSpace(p.Content); strings.Contains(c, "<definitions") {
+			return c
+		}
+	}
+	return ""
 }
 
 type xmlEP struct {
@@ -115,6 +143,16 @@ func Parse(data []byte) (*model.Project, error) {
 		if len(xi.Endpoints) > 0 {
 			ifaceEndpoint = strings.TrimSpace(xi.Endpoints[0].Value)
 		}
+		// 方案 A: parse the embedded WSDL to build pure structural templates
+		// (no business data) for each operation.
+		tmplByOp := map[string]string{}
+		if w := xi.embeddedWSDL(); w != "" {
+			if parsed, err := wsdl.Parse([]byte(w)); err == nil {
+				for _, po := range parsed.Operations {
+					tmplByOp[po.Name] = po.Request
+				}
+			}
+		}
 		for _, op := range xi.Operations {
 			o := model.Operation{
 				Name:       op.Name,
@@ -123,6 +161,10 @@ func Parse(data []byte) (*model.Project, error) {
 				Style:      op.Style,
 				Use:        op.Use,
 				InputName:  op.InputName,
+			}
+			// Structural skeleton from the embedded WSDL, if available.
+			if t, ok := tmplByOp[op.Name]; ok {
+				o.Template = t
 			}
 			// Each <con:call> is a distinct saved request sample. Preserve its
 			// title and its own request body so no parameter set is lost.

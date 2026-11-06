@@ -118,6 +118,13 @@ func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
 	if svcName == "" {
 		svcName = name
 	}
+	// For WSDL-parsed operations the generated Request IS the pure structural
+	// skeleton (no business data), so mirror it into Template as well.
+	for i := range svc.Operations {
+		if svc.Operations[i].Template == "" {
+			svc.Operations[i].Template = svc.Operations[i].Request
+		}
+	}
 	proj := model.Project{
 		Name:   svcName,
 		Source: "wsdl",
