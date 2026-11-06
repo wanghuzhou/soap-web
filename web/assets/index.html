@@ -15,6 +15,7 @@
         <span class="subtitle">SOAP / WSDL 接口调试</span>
       </div>
       <div class="topbar-actions">
+        <button id="btnTheme" class="btn ghost" title="切换白天/夜间模式">☀ 白天</button>
         <button id="btnNewProject" class="btn ghost" title="新建空白工程">新建工程</button>
         <button id="btnImport" class="btn ghost" title="导入 SoapUI 工程 (.xml)">导入 SoapUI 工程</button>
         <button id="btnWsdl" class="btn ghost" title="解析 WSDL 生成请求">解析 WSDL</button>
@@ -24,15 +25,17 @@
 
     <main class="workspace">
       <!-- Left: project tree -->
-      <aside class="sidebar">
+      <aside class="sidebar" id="paneLeft">
         <div class="pane-head">工程</div>
         <div id="tree" class="tree">
           <div class="empty-hint">导入 SoapUI 工程或解析 WSDL 后<br>操作会显示在这里。</div>
         </div>
       </aside>
 
+      <div class="resizer" id="resizerLeft" title="拖动调整宽度"></div>
+
       <!-- Center: request editor -->
-      <section class="editor-pane">
+      <section class="editor-pane" id="paneMid">
         <div class="pane-head">
           <span>请求</span>
           <span id="reqTitle" class="muted"></span>
@@ -70,8 +73,10 @@
         </div>
       </section>
 
+      <div class="resizer" id="resizerRight" title="拖动调整宽度"></div>
+
       <!-- Right: response -->
-      <section class="response-pane">
+      <section class="response-pane" id="paneRight">
         <div class="pane-head">
           <span>响应</span>
           <div class="resp-tabs">

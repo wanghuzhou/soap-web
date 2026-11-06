@@ -8,6 +8,7 @@ const state = {
   selected: null,      // { kind, node, ids:{pid,sid,oid,cid}, parentOp }
   response: null,
   view: 'pretty',
+  theme: 'dark',
 };
 
 /* ---------------- Toast ---------------- */
@@ -243,7 +244,7 @@ function renderTree() {
   projects.forEach((p) => {
     html += `<div class="tree-group">
       <div class="tree-node proj" data-kind="proj">
-        <span class="ico">▾</span>${escapeHtml(p.name || '工程')}
+        <span class="ico">▾</span><span class="lbl">${escapeHtml(p.name || '工程')}</span>
         <span class="tag">${(p.source || 'native')}</span>
         <span class="node-actions">
           <button class="mini" title="重命名工程" data-act="rename-proj" data-pid="${p.id}">✎</button>
@@ -256,7 +257,7 @@ function renderTree() {
     (p.services || []).forEach((svc) => {
       const svcSel = sel && sel.kind === 'svc' && sel.ids.sid === svc.id ? ' selected' : '';
       html += `<div class="tree-node svc${svcSel}" style="padding-left:20px" data-kind="svc" data-pid="${p.id}" data-sid="${svc.id}">
-        <span class="ico">▸</span>${escapeHtml(svc.name || 'service')}
+        <span class="ico">▸</span><span class="lbl">${escapeHtml(svc.name || 'service')}</span>
         <span class="tag">service</span>
         <span class="node-actions">
           <button class="mini" title="新建操作" data-act="add-op" data-pid="${p.id}" data-sid="${svc.id}">+操作</button>
@@ -268,7 +269,7 @@ function renderTree() {
         const opSel = sel && sel.kind === 'op' && sel.ids.oid === op.id ? ' selected' : '';
         const cnt = (op.calls && op.calls.length) ? op.calls.length + ' 请求' : 'op';
         html += `<div class="tree-node op${opSel}" style="padding-left:38px" data-kind="op" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">
-          <span class="ico">◇</span>${escapeHtml(op.name || 'operation')}<span class="tag">${cnt}</span>
+          <span class="ico">◇</span><span class="lbl">${escapeHtml(op.name || 'operation')}</span><span class="tag">${cnt}</span>
           <span class="node-actions">
             <button class="mini" title="新建请求样例" data-act="add-call" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">+请求</button>
             <button class="mini danger" title="删除操作" data-act="del-op" data-pid="${p.id}" data-sid="${svc.id}" data-oid="${op.id}">✕</button>
@@ -698,8 +699,114 @@ window.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  // Theme toggle (persisted).
+  initTheme();
+  $('btnTheme').addEventListener('click', toggleTheme);
+
+  // Resizable panes.
+  initResizers();
+
   // Initial paint + load persisted projects.
   syncHighlight();
   updateEditButtons();
   loadProjects(true);
 });
+
+/* ---------------- Theme (light / dark) ---------------- */
+function applyTheme(theme) {
+  const t = theme === 'light' ? 'light' : 'dark';
+  if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  else document.documentElement.removeAttribute('data-theme');
+  const btn = $('btnTheme');
+  if (btn) btn.textContent = t === 'light' ? '🌙 夜间' : '☀ 白天';
+  state.theme = t;
+  try { localStorage.setItem('soap-web-theme', t); } catch (e) { /* ignore */ }
+}
+function initTheme() {
+  // Allow explicit override via URL (?theme=light / ?theme=dark).
+  let q = null;
+  try { q = new URLSearchParams(location.search).get('theme'); } catch (e) { /* ignore */ }
+  if (q === 'light' || q === 'dark') { applyTheme(q); return; }
+  let saved = null;
+  try { saved = localStorage.getItem('soap-web-theme'); } catch (e) { /* ignore */ }
+  if (!saved) {
+    // Respect OS preference on first visit.
+    saved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+  }
+  applyTheme(saved);
+}
+function toggleTheme() {
+  applyTheme(state.theme === 'light' ? 'dark' : 'light');
+}
+
+/* ---------------- Resizable three panes ---------------- */
+// Persists left and middle pane widths; the right pane takes the remainder.
+function initResizers() {
+  const ws = document.querySelector('.workspace');
+  if (!ws) return;
+  const left = $('paneLeft'), mid = $('paneMid'), right = $('paneRight');
+  const rL = $('resizerLeft'), rR = $('resizerRight');
+  if (!left || !mid || !right || !rL || !rR) return;
+
+  // Restore saved widths.
+  try {
+    const js = localStorage.getItem('soap-web-cols');
+    if (js) {
+      const c = JSON.parse(js);
+      if (c.left) ws.style.setProperty('--col-left', c.left + 'px');
+      if (c.mid) ws.style.setProperty('--col-mid', c.mid + 'px');
+      if (c.right) ws.style.setProperty('--col-right', c.right + 'px');
+    }
+  } catch (e) { /* ignore */ }
+
+  const MIN = 160;
+
+  function startDrag(handle, onMove) {
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      handle.classList.add('dragging');
+      document.body.classList.add('resizing');
+      const move = (ev) => onMove(ev);
+      const up = () => {
+        handle.classList.remove('dragging');
+        document.body.classList.remove('resizing');
+        document.removeEventListener('mousemove', move);
+        document.removeEventListener('mouseup', up);
+        saveCols();
+      };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    });
+  }
+
+  function saveCols() {
+    const rectL = left.getBoundingClientRect().width;
+    const rectM = mid.getBoundingClientRect().width;
+    const rectR = right.getBoundingClientRect().width;
+    try {
+      localStorage.setItem('soap-web-cols', JSON.stringify({ left: Math.round(rectL), mid: Math.round(rectM), right: Math.round(rectR) }));
+    } catch (e) { /* ignore */ }
+  }
+
+  // Drag left divider: resizes the left pane.
+  startDrag(rL, (ev) => {
+    const wsRect = ws.getBoundingClientRect();
+    let w = ev.clientX - wsRect.left;
+    w = Math.max(MIN, Math.min(w, wsRect.width - 320));
+    ws.style.setProperty('--col-left', w + 'px');
+    syncHighlight();
+  });
+
+  // Drag right divider: resizes the middle pane (right takes remainder).
+  startDrag(rR, (ev) => {
+    const wsRect = ws.getBoundingClientRect();
+    // middle width = dividerX - leftWidth - handle widths
+    const leftW = left.getBoundingClientRect().width;
+    let midW = ev.clientX - wsRect.left - leftW - 12; // 2 handles * 6px
+    midW = Math.max(MIN, Math.min(midW, wsRect.width - leftW - MIN - 12));
+    ws.style.setProperty('--col-mid', midW + 'px');
+    syncHighlight();
+  });
+
+  window.addEventListener('resize', syncHighlight);
+}
