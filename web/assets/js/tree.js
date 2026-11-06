@@ -5,6 +5,7 @@ import { apiJSON } from './api.js';
 import { toast } from './toast.js';
 import { state, findProject, findService, findOperation, findCall, toggleCollapsed } from './state.js';
 import { openProxyDialog, proxyLabel } from './proxy.js';
+import { openRowMenu } from './rowmenu.js';
 
 let handlers = {
   onSelect: () => {},
@@ -55,12 +56,12 @@ export function renderTree() {
 
   let html = '';
   projects.forEach((project) => {
+    // The project row only keeps its primary action; everything else lives in
+    // the "⋯" menu so the row stays readable at a glance.
     const projectActions = `
-      <button class="mini" title="代理设置" data-act="proxy-proj" data-pid="${escapeAttr(project.id)}">代理</button>
-      <button class="mini" title="重命名工程" data-act="rename-proj" data-pid="${escapeAttr(project.id)}">✎</button>
-      <button class="mini" title="导出 SoapUI XML" data-act="export-proj" data-pid="${escapeAttr(project.id)}">导出</button>
       <button class="mini" title="新建服务" data-act="add-svc" data-pid="${escapeAttr(project.id)}">+服务</button>
-      <button class="mini danger" title="删除工程" data-act="del-proj" data-pid="${escapeAttr(project.id)}">✕</button>`;
+      <button class="mini more" title="更多操作" aria-haspopup="menu" aria-expanded="false"
+              data-more="proj" data-pid="${escapeAttr(project.id)}">⋯</button>`;
 
     html += '<div class="tree-group">';
     html += rowHtml({
@@ -148,6 +149,13 @@ export function renderTree() {
 }
 
 function handleTreeClick(event) {
+  const moreButton = event.target.closest('[data-more]');
+  if (moreButton) {
+    event.stopPropagation();
+    openProjectMenu(moreButton);
+    return;
+  }
+
   const actionButton = event.target.closest('[data-act]');
   if (actionButton) {
     event.stopPropagation();
@@ -184,6 +192,28 @@ function handleTreeClick(event) {
     const found = findCall(ids);
     if (found) handlers.onSelect(found.call, 'call', { ids, parentOp: found.operation });
   }
+}
+
+// Project row "⋯" menu. Items carry the same dataset shape as the old inline
+// buttons, so handleTreeAction needs no changes.
+function openProjectMenu(anchor) {
+  const project = findProject(anchor.dataset.pid);
+  if (!project) return;
+
+  const pid = project.id;
+  const items = [
+    { label: '代理设置…', dataset: { act: 'proxy-proj', pid } },
+    { label: '重命名工程…', dataset: { act: 'rename-proj', pid } },
+    { label: '导出 SoapUI XML', dataset: { act: 'export-proj', pid } },
+    { separator: true },
+    { label: '删除工程', danger: true, dataset: { act: 'del-proj', pid } },
+  ];
+
+  openRowMenu({
+    anchor,
+    items,
+    onSelect: (item) => handleTreeAction(item.dataset),
+  });
 }
 
 function clearSelection(pid, sid, oid) {
