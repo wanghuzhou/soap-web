@@ -27,7 +27,9 @@ export function initEditor({ reload }) {
 
   document.addEventListener('keydown', (event) => {
     const modalOpen = !$('proxyOverlay').classList.contains('hidden');
-    if (modalOpen) return;
+    // While a tree row is being renamed inline, global shortcuts must not fire
+    // (the editor also stops its own keydown from bubbling, this is a guard).
+    if (modalOpen || document.querySelector('.rename-input')) return;
     if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
       event.preventDefault();
       send();

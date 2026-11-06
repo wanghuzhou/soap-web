@@ -404,6 +404,26 @@ body.resizing { cursor: col-resize; user-select: none; }
   background: var(--accent-soft);
 }
 
+/* In-place rename: the label is swapped for an input, tags/actions step aside
+   so the editor gets the full row width. */
+.tree-node.editing > .tag,
+.tree-node.editing .node-actions { display: none !important; }
+.rename-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: 5px;
+  background: var(--bg-elev);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+.rename-input::selection { background: var(--accent-soft); color: var(--text); }
+
 /* ---------- Row popover menu (project row "⋯") ---------- */
 .row-menu {
   position: fixed;

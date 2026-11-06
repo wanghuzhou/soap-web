@@ -6,6 +6,7 @@ import { toast } from './toast.js';
 import { state, findProject, findService, findOperation, findCall, toggleCollapsed } from './state.js';
 import { openProxyDialog, proxyLabel } from './proxy.js';
 import { openRowMenu } from './rowmenu.js';
+import { startInlineRename, cancelActiveRename } from './inlineedit.js';
 
 let handlers = {
   onSelect: () => {},
@@ -41,6 +42,9 @@ function rowHtml({ kind, depth, attrs, label, tags = '', actions = '', toggleKey
 
 export function renderTree() {
   const tree = $('tree');
+  // A rebuild would detach an in-place rename input; cancel it first so the
+  // module-level editor state never points at a removed element.
+  cancelActiveRename();
   const projects = state.projects || [];
   const count = $('projectCount');
   if (count) count.textContent = String(projects.length);
@@ -119,7 +123,7 @@ export function renderTree() {
             if (!isCollapsed(operation.id)) {
               (operation.calls || []).forEach((call) => {
                 const callActions = `
-                  <button class="mini" title="重命名" data-act="rename-call" data-pid="${escapeAttr(project.id)}" data-sid="${escapeAttr(service.id)}" data-oid="${escapeAttr(operation.id)}" data-cid="${escapeAttr(call.id)}">✎</button>
+                  <button class="mini" title="重命名请求（就地编辑）" data-act="rename-call" data-pid="${escapeAttr(project.id)}" data-sid="${escapeAttr(service.id)}" data-oid="${escapeAttr(operation.id)}" data-cid="${escapeAttr(call.id)}">✎</button>
                   <button class="mini danger" title="删除请求" data-act="del-call" data-pid="${escapeAttr(project.id)}" data-sid="${escapeAttr(service.id)}" data-oid="${escapeAttr(operation.id)}" data-cid="${escapeAttr(call.id)}">✕</button>`;
                 const callSelected = !!state.selected && state.selected.kind === 'call'
                   && state.selected.ids.pid === project.id
@@ -149,6 +153,9 @@ export function renderTree() {
 }
 
 function handleTreeClick(event) {
+  // Never let a click inside the rename input select / collapse the row.
+  if (event.target.closest('.rename-input')) return;
+
   const moreButton = event.target.closest('[data-more]');
   if (moreButton) {
     event.stopPropagation();
@@ -203,7 +210,7 @@ function openProjectMenu(anchor) {
   const pid = project.id;
   const items = [
     { label: '代理设置…', dataset: { act: 'proxy-proj', pid } },
-    { label: '重命名工程…', dataset: { act: 'rename-proj', pid } },
+    { label: '重命名工程', dataset: { act: 'rename-proj', pid } },
     { label: '导出 SoapUI XML', dataset: { act: 'export-proj', pid } },
     { separator: true },
     { label: '删除工程', danger: true, dataset: { act: 'del-proj', pid } },
@@ -228,6 +235,73 @@ function clearSelection(pid, sid, oid) {
 
 function projectURL(projectID, suffix = '') {
   return '/api/projects/' + encodeURIComponent(projectID) + suffix;
+}
+
+// ---- In-place rename (no prompt dialogs) ----
+
+function findRow(kind, ids) {
+  for (const row of $('tree').querySelectorAll('.tree-node')) {
+    const d = row.dataset;
+    if (d.kind !== kind || d.pid !== ids.pid) continue;
+    if (ids.sid && d.sid !== ids.sid) continue;
+    if (ids.oid && d.oid !== ids.oid) continue;
+    if (ids.cid && d.cid !== ids.cid) continue;
+    return row;
+  }
+  return null;
+}
+
+function beginRename(kind, ids) {
+  let current = '';
+  if (kind === 'proj') {
+    const project = findProject(ids.pid);
+    if (!project) return;
+    current = project.name || '';
+  } else if (kind === 'call') {
+    const found = findCall(ids);
+    if (!found) return;
+    current = found.call.title || '';
+  } else {
+    return;
+  }
+
+  const row = findRow(kind, ids);
+  if (!row) return;
+  startInlineRename(row, {
+    value: current,
+    onCommit: (next) => commitRename(kind, ids, next, current),
+  });
+}
+
+async function commitRename(kind, ids, next, current) {
+  if (!next || next === current) return;
+  try {
+    if (kind === 'proj') {
+      const project = findProject(ids.pid);
+      if (!project) return;
+      await apiJSON('PUT', projectURL(ids.pid), { ...project, name: next });
+      project.name = next;
+      renderTree();
+    } else {
+      const found = findCall(ids);
+      if (!found) return;
+      const url = projectURL(ids.pid,
+        `/services/${encodeURIComponent(ids.sid)}/operations/${encodeURIComponent(ids.oid)}/calls/${encodeURIComponent(ids.cid)}`);
+      await apiJSON('PUT', url, { ...found.call, title: next });
+      found.call.title = next;
+      renderTree();
+      // Keep the request pane title in sync without reloading the editor
+      // (which would discard unsaved XML edits).
+      const selected = state.selected;
+      if (selected && selected.kind === 'call' && selected.ids.cid === ids.cid) {
+        const parent = selected.parentOp;
+        $('reqTitle').textContent = next + (parent ? '  ·  ' + (parent.name || '') : '');
+      }
+    }
+    toast('已重命名');
+  } catch (error) {
+    toast('重命名失败: ' + error.message, true);
+  }
 }
 
 async function handleTreeAction(data) {
@@ -268,15 +342,7 @@ async function handleTreeAction(data) {
       clearSelection(data.pid, data.sid, data.oid);
       await handlers.reload();
     } else if (action === 'rename-call') {
-      const ids = { pid: data.pid, sid: data.sid, oid: data.oid, cid: data.cid };
-      const found = findCall(ids);
-      if (!found) return;
-      const current = found.call.title || '';
-      const title = prompt('重命名请求样例：', current);
-      if (title == null || title === current) return;
-      const url = projectURL(data.pid, `/services/${encodeURIComponent(data.sid)}/operations/${encodeURIComponent(data.oid)}/calls/${encodeURIComponent(data.cid)}`);
-      await apiJSON('PUT', url, { ...found.call, title });
-      await handlers.reload();
+      beginRename('call', { pid: data.pid, sid: data.sid, oid: data.oid, cid: data.cid });
     } else if (action === 'proxy-proj') {
       openProxyDialog(data.pid);
     } else if (action === 'del-proj') {
@@ -286,13 +352,7 @@ async function handleTreeAction(data) {
       clearSelection(data.pid);
       await handlers.reload();
     } else if (action === 'rename-proj') {
-      const project = findProject(data.pid);
-      if (!project) return;
-      const name = prompt('重命名工程：', project.name || '');
-      if (name == null || name === project.name) return;
-      await apiJSON('PUT', projectURL(data.pid), { ...project, name });
-      await handlers.reload();
-      toast('工程已重命名');
+      beginRename('proj', { pid: data.pid });
     } else if (action === 'export-proj') {
       const link = document.createElement('a');
       link.href = projectURL(data.pid, '/export');
