@@ -12,7 +12,8 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 - **工程级代理**：每个工程可单独设置 **系统代理 / 直连 / 自定义代理**；自定义支持 **HTTP** 与 **SOCKS5**，用户名密码可留空。用于内网服务无法直连的场景。
 - **工程重命名 & 导出**：可重命名工程；可导出为 SoapUI 兼容的 `.xml`，方便带回 SoapUI 或分享给同事（导出的工程可再次被本工具导入，结构一致）。
 - **导入 SoapUI 工程**：解析 `.xml` 工程，载入 service / operation / 测试用例步骤及其已保存的请求报文与 endpoint，可一键重发。
-- **WSDL 解析**：解析 WSDL 1.1 + 内嵌 XSD，列出所有 operation，并自动生成结构正确的请求模板（支持嵌套 complexType、extension 继承、choice 降级）。
+- **WSDL 解析**：解析 WSDL 1.1 + 内嵌 XSD，列出所有 operation，并为每个 operation 自动生成一条结构正确的请求样例（支持嵌套 complexType、extension 继承、choice 降级）。
+- **WSDL URL 导入**：除本地文件外，可直接填写 `http://host/service?wsdl` 由后端抓取并解析，适用于只有内网可达的服务；下载复用工程代理，支持 GBK 等非 UTF-8 编码，并对协议（仅 http/https）、大小（8 MB）与超时（30s）做限制。
 - **SOAP 请求发送**：支持 SOAP 1.1（`text/xml` + `SOAPAction`）与 SOAP 1.2（`application/soap+xml` + action）。
 - **请求体编辑**：XML 语法高亮、格式化/压缩、长行自动换行。
 - **响应多视图**：格式化（语法高亮）/ 原始 / Headers，显示状态码、耗时、大小，支持一键复制。
@@ -20,7 +21,7 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 - **报文保真**：格式化与换行规整不会改写文本内容——`<Token>  abc  </Token>` 的前后空格、`xml:space="preserve"`、多行 base64、含 `\n` 的 JSON/正则/Windows 路径都会原样保留。
 - **并发安全**：工程读写返回值均为深拷贝，写操作走「克隆 → 落盘 → 换入」，磁盘失败时内存状态不变；改代理走窄接口，不会用旧快照覆盖其他标签页的改动。发送带请求令牌，切换请求样例后迟到的响应会被丢弃，并支持中途取消。
 - **界面优化**：支持白天/夜间主题切换（跟随系统，记忆选择）；左中右三栏可拖动调整宽度（记忆宽度，窗口缩放自动收敛）；窄屏自动切换为请求/响应上下堆叠；长标题自动省略不撑高行；顶栏「本地服务状态」每 10 秒探活 `/api/health`，后端停止后自动变红提示“已断开”，点击可立即重试。
-- **可维护前端**：前端按职责拆分为 ES Modules（state / api / xml / tree / editor / response / proxy / theme / layout），无构建步骤、无外部依赖，仍随 Go 二进制内嵌分发。
+- **可维护前端**：前端按职责拆分为 ES Modules（state / api / xml / tree / editor / response / proxy / wsdlurl / theme / layout），无构建步骤、无外部依赖，仍随 Go 二进制内嵌分发。
 
 > 范围说明：本项目**只做**"导入 + WSDL 生成请求模板 + 发送测试"。
 > 不包含断言引擎、Groovy 脚本、WS-Security —— 这些是 SoapUI 兼容的深水区，明确不在范围内。
@@ -59,6 +60,7 @@ internal/charset    GBK / GB2312 / GB18030 / Big5 解码（响应体与 XML 文�
 internal/transport  HTTP/SOAP 发送与响应归一化
 internal/soapuiproj SoapUI project xml 解析与导出
 internal/wsdl       WSDL 1.1 + XSD 解析与请求模板生成
+internal/wsdlfetch  从 URL 抓取 WSDL（协议/大小/超时限制，走工程代理）
 internal/store      工程数据持久化（JSON 原子写入）
 internal/api        REST API（路由按 method + path wildcard 注册）
 web/assets/index.html  页面骨架
@@ -72,6 +74,7 @@ web/assets/js/         前端 ES Modules（无构建步骤）
   editor.js            请求编辑与发送
   response.js          响应渲染与复制
   proxy.js             工程代理设置
+  wsdlurl.js           从 URL 导入 WSDL 的对话框
   theme.js             明暗主题
   layout.js            可拖拽分栏与宽度持久化
 web/selftest/          前端回归自测（不参与 embed，不对外提供）
@@ -99,7 +102,8 @@ node web/selftest/tree.selftest.mjs        # 工程树渲染契约回归自测�
 |---|---|---|
 | POST | `/api/send` | 发送 HTTP/SOAP 请求，返回状态、头、体、耗时 |
 | POST | `/api/import/soapui` | 上传 SoapUI 工程 xml，解析并**保存**，返回保存后的工程 |
-| POST | `/api/wsdl/parse` | 上传 WSDL，解析并**保存**为新工程，返回 `{service, project}` |
+| POST | `/api/wsdl/parse` | 上传 WSDL（或 JSON `{url}`）解析并**保存**为新工程，返回 `{service, project}` |
+| POST | `/api/wsdl/fetch` | 从 URL 抓取 WSDL（JSON `{url, projectId?}`，可复用工程代理）并**保存**为新工程 |
 | GET | `/api/projects` | 列出所有已保存工程 |
 | POST | `/api/projects` | 新建工程 |
 | GET/PUT/DELETE | `/api/projects/{pid}` | 获取 / 整体更新（含重命名）/ 删除工程 |

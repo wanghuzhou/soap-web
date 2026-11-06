@@ -18,6 +18,7 @@ import (
 	"soapweb/internal/store"
 	"soapweb/internal/transport"
 	"soapweb/internal/wsdl"
+	"soapweb/internal/wsdlfetch"
 )
 
 // Server holds shared dependencies for handlers.
@@ -36,6 +37,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/send", s.handleSend)
 	mux.HandleFunc("POST /api/import/soapui", s.handleImportSoapUI)
 	mux.HandleFunc("POST /api/wsdl/parse", s.handleParseWSDL)
+	mux.HandleFunc("POST /api/wsdl/fetch", s.handleFetchWSDL)
 
 	s.registerProjectRoutes(mux)
 
@@ -200,7 +202,16 @@ func (s *Server) handleImportSoapUI(w http.ResponseWriter, r *http.Request) {
 
 // handleParseWSDL parses a WSDL and persists it as a new project containing a
 // single service.
+//
+// Despite its name it accepts both import sources: a plain/multipart upload
+// (readUpload) and a JSON body {"url": "..."} that asks the backend to fetch
+// the document. Keeping one endpoint means the file and URL paths cannot drift
+// apart; POST /api/wsdl/fetch is an explicit alias for the URL case.
 func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
+	if isJSONRequest(r) {
+		s.handleFetchWSDL(w, r)
+		return
+	}
 	data, name, err := readUpload(r)
 	if err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
@@ -211,30 +222,7 @@ func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "解析 WSDL 失败: "+err.Error())
 		return
 	}
-	serviceName := service.Name
-	if serviceName == "" {
-		serviceName = name
-	}
-	// For WSDL-parsed operations the generated Request IS the pure structural
-	// skeleton (no business data), so mirror it into Template as well.
-	for i := range service.Operations {
-		if service.Operations[i].Template == "" {
-			service.Operations[i].Template = service.Operations[i].Request
-		}
-	}
-	project := model.Project{
-		Name:   serviceName,
-		Source: "wsdl",
-		Services: []model.Service{{
-			Name:       serviceName,
-			Wsdl:       name,
-			Operations: service.Operations,
-		}},
-	}
-	if project.Name == "" {
-		project.Name = "WSDL 工程"
-	}
-	saved, err := s.Store.AddProject(project)
+	saved, err := s.persistWSDLProject(service, name, name, "wsdl")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "保存 WSDL 工程失败: "+err.Error())
 		return
@@ -243,6 +231,122 @@ func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
 		"service": service,
 		"project": saved,
 	})
+}
+
+// fetchWSDLRequest is the payload for POST /api/wsdl/fetch.
+type fetchWSDLRequest struct {
+	URL string `json:"url"`
+	// ProjectID is optional. When set, that project's proxy configuration is
+	// used for the download, which lets an intranet WSDL be reached through the
+	// same proxy as the services the project debugs.
+	ProjectID string `json:"projectId"`
+}
+
+// handleFetchWSDL downloads a WSDL from a URL, parses it and persists it as a
+// new project — the remote counterpart of handleParseWSDL.
+func (s *Server) handleFetchWSDL(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[fetchWSDLRequest](w, r)
+	if !ok {
+		return
+	}
+
+	var proxyCfg *model.ProxySettings
+	if req.ProjectID != "" {
+		if p, err := s.Store.Get(req.ProjectID); err == nil {
+			proxyCfg = p.Proxy
+		}
+	}
+
+	fetched, err := wsdlfetch.Fetch(req.URL, proxyCfg)
+	if err != nil {
+		status := http.StatusBadGateway
+		switch {
+		case errors.Is(err, wsdlfetch.ErrInvalidURL):
+			status = http.StatusBadRequest
+		case errors.Is(err, wsdlfetch.ErrNotWSDL):
+			status = http.StatusUnprocessableEntity
+		}
+		writeErr(w, status, err.Error())
+		return
+	}
+
+	service, err := wsdl.Parse(fetched.Data)
+	if err != nil {
+		writeErr(w, http.StatusUnprocessableEntity, "解析 WSDL 失败: "+err.Error())
+		return
+	}
+	project, err := s.persistWSDLProject(service, fetched.Name, fetched.FinalURL, "wsdl-url")
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "保存 WSDL 工程失败: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"service": service,
+		"project": project,
+		"url":     fetched.FinalURL,
+	})
+}
+
+// persistWSDLProject turns a parsed WSDL service into a saved project.
+//
+// source records where the document came from (a filename for uploads, the
+// final URL for remote imports) so the project tree can show its origin.
+//
+// Every operation gets one generated request sample (a model.Call). SoapUI
+// creates a request per operation on WSDL import, and without it opening a
+// freshly imported project shows an empty editor until the user manually adds
+// one — which looks exactly like "the import failed" to a first-time user.
+func (s *Server) persistWSDLProject(service *wsdl.Result, fallbackName, source, projectSource string) (model.Project, error) {
+	serviceName := service.Name
+	if serviceName == "" {
+		serviceName = fallbackName
+	}
+	// For WSDL-parsed operations the generated Request IS the pure structural
+	// skeleton (no business data), so mirror it into Template as well.
+	for i := range service.Operations {
+		op := &service.Operations[i]
+		if op.Template == "" {
+			op.Template = op.Request
+		}
+		if len(op.Calls) == 0 {
+			body := op.Template
+			if body == "" {
+				body = op.Request
+			}
+			if body != "" {
+				title := op.Name
+				if title == "" {
+					title = "请求"
+				}
+				op.Calls = []model.Call{{
+					Title:    title,
+					Endpoint: op.Endpoint,
+					Action:   op.SoapAction,
+					Request:  body,
+				}}
+			}
+		}
+	}
+	project := model.Project{
+		Name:   serviceName,
+		Source: projectSource,
+		Services: []model.Service{{
+			Name:       serviceName,
+			Wsdl:       source,
+			Operations: service.Operations,
+		}},
+	}
+	if project.Name == "" {
+		project.Name = "WSDL 工程"
+	}
+	return s.Store.AddProject(project)
+}
+
+// isJSONRequest reports whether the request body is JSON.
+func isJSONRequest(r *http.Request) bool {
+	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	return mediaType == "application/json"
 }
 
 // readUpload extracts the raw bytes from a multipart "file" field, or from the

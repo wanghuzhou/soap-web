@@ -162,6 +162,18 @@ func buildClient(cfg *model.ProxySettings, timeout time.Duration) (*http.Client,
 	return &http.Client{Transport: tr, Timeout: timeout}, nil
 }
 
+// NewClient returns an HTTP client that honours cfg's proxy settings.
+//
+// It is exported for importers that need the same proxy behaviour as the SOAP
+// sender (remote WSDL fetching), so a project's proxy configuration applies to
+// every outbound request, not only /api/send.
+func NewClient(cfg *model.ProxySettings, timeout time.Duration) (*http.Client, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	return buildClient(cfg, timeout)
+}
+
 // transportFor returns the shared Transport for cfg, creating it on first use.
 func transportFor(cfg *model.ProxySettings) (*http.Transport, error) {
 	key := transportKey(cfg)

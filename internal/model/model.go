@@ -8,7 +8,7 @@ import "errors"
 type Project struct {
 	ID         string         `json:"id"` // stable identifier for CRUD
 	Name       string         `json:"name"`
-	Source     string         `json:"source"` // e.g. "soapui" or "native"
+	Source     string         `json:"source"` // e.g. "soapui", "wsdl", "wsdl-url" or "native"
 	Proxy      *ProxySettings `json:"proxy,omitempty"`
 	Services   []Service      `json:"services"`
 	TestSuites []TestSuite    `json:"testSuites"`

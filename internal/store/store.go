@@ -60,7 +60,56 @@ func New(path string) (*Store, error) {
 			return nil, err
 		}
 	}
+	// Older WSDL imports stored operations without any request sample. Opening
+	// such a project showed an empty editor, which looks like a failed import.
+	// Backfill one sample from the generated template and persist the fix.
+	if backfillWSDLCalls(s.projects) {
+		if err := s.saveProjects(s.projects); err != nil {
+			return nil, err
+		}
+	}
 	return s, nil
+}
+
+// backfillWSDLCalls gives legacy WSDL-imported operations a default request
+// sample when the operation carries a generated template but no call. It is
+// idempotent: projects that already have calls are left untouched.
+func backfillWSDLCalls(projects []model.Project) bool {
+	changed := false
+	for pi := range projects {
+		project := &projects[pi]
+		if project.Source != "wsdl" && project.Source != "wsdl-url" {
+			continue
+		}
+		for si := range project.Services {
+			for oi := range project.Services[si].Operations {
+				op := &project.Services[si].Operations[oi]
+				if len(op.Calls) > 0 {
+					continue
+				}
+				body := op.Template
+				if body == "" {
+					body = op.Request
+				}
+				if body == "" {
+					continue
+				}
+				title := op.Name
+				if title == "" {
+					title = "请求"
+				}
+				op.Calls = []model.Call{{
+					ID:       NewID(),
+					Title:    title,
+					Endpoint: op.Endpoint,
+					Action:   op.SoapAction,
+					Request:  body,
+				}}
+				changed = true
+			}
+		}
+	}
+	return changed
 }
 
 // NewID returns a short random hex identifier.

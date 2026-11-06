@@ -37,8 +37,11 @@
           <button id="btnImport" class="btn ghost" title="导入 SoapUI 工程（.xml）">
             <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M8 2.5v7.2M5.2 7.1 8 9.9l2.8-2.8"/><path d="M3 11.4v1.3c0 .7.6 1.3 1.3 1.3h7.4c.7 0 1.3-.6 1.3-1.3v-1.3"/></svg></span><span class="btn-text">导入工程</span>
           </button>
-          <button id="btnWsdl" class="btn ghost" title="解析 WSDL 生成请求">
+          <button id="btnWsdl" class="btn ghost" title="从本地文件解析 WSDL 生成请求">
             <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M5.2 3.5 2 8l3.2 4.5M10.8 3.5 14 8l-3.2 4.5M9.3 2.8 6.7 13.2"/></svg></span><span class="btn-text">解析 WSDL</span>
+          </button>
+          <button id="btnWsdlUrl" class="btn ghost" title="从 URL 抓取并导入 WSDL">
+            <span class="btn-icon" aria-hidden="true"><svg viewBox="0 0 16 16"><path d="M6.2 9.8a2.6 2.6 0 0 0 3.7 0l2.2-2.2a2.6 2.6 0 0 0-3.7-3.7l-.9.9"/><path d="M9.8 6.2a2.6 2.6 0 0 0-3.7 0L3.9 8.4a2.6 2.6 0 0 0 3.7 3.7l.9-.9"/></svg></span><span class="btn-text">URL 导入</span>
           </button>
         </div>
         <span class="topbar-divider" aria-hidden="true"></span>
@@ -212,6 +215,34 @@
       <div class="modal-foot">
         <button id="proxyCancel" class="btn ghost">取消</button>
         <button id="proxySave" class="btn primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- WSDL URL import dialog -->
+  <div id="wsdlUrlOverlay" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="wsdlUrlTitle">
+      <div class="modal-head">
+        <span id="wsdlUrlTitle">从 URL 导入 WSDL</span>
+        <button id="wsdlUrlClose" class="modal-x" title="关闭" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body modal-form">
+        <div class="modal-sub">由后端抓取并解析 WSDL，保存为新的工程。内网服务可选择现有工程的代理设置。</div>
+        <div class="field-row">
+          <label for="wsdlUrlInput">WSDL URL</label>
+          <input id="wsdlUrlInput" type="url" placeholder="http://127.0.0.1:8080/services/ws/api?wsdl" spellcheck="false" autocomplete="off">
+        </div>
+        <div class="field-row">
+          <label for="wsdlUrlProxy">代理</label>
+          <select id="wsdlUrlProxy">
+            <option value="">系统代理</option>
+          </select>
+        </div>
+        <div id="wsdlUrlError" class="modal-error hidden" role="alert"></div>
+      </div>
+      <div class="modal-foot">
+        <button id="wsdlUrlCancel" class="btn ghost">取消</button>
+        <button id="wsdlUrlImport" class="btn primary">获取并导入</button>
       </div>
     </div>
   </div>

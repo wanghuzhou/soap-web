@@ -10,6 +10,7 @@ import { initEditor, loadNode, updateEditButtons, isDirty } from './editor.js';
 import { initResponse } from './response.js';
 import { initProxy } from './proxy.js';
 import { initLayout } from './layout.js';
+import { initWsdlUrl } from './wsdlurl.js';
 
 let pendingFileMode = null;
 
@@ -157,6 +158,13 @@ function selectFirstInProject(project) {
   }
 }
 
+// selectProject focuses a freshly imported project by id. The caller must have
+// reloaded state.projects first, otherwise the project is not in the lookup.
+function selectProject(project) {
+  const found = (state.projects || []).find((item) => item.id === (project && project.id));
+  if (found) selectFirstInProject(found);
+}
+
 async function createProject() {
   const name = prompt('新工程名称：', '新工程');
   if (name == null) return;
@@ -208,6 +216,7 @@ function boot() {
   initEditor({ reload });
   initProxy({ reload });
   initLayout();
+  initWsdlUrl({ reload, onImported: selectProject });
 
   $('btnNewProject').addEventListener('click', createProject);
   $('btnNewProjectSide').addEventListener('click', createProject);

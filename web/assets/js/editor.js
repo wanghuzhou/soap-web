@@ -53,7 +53,9 @@ export function initEditor({ reload }) {
   textarea.addEventListener('keydown', handleEditorKeydown);
 
   document.addEventListener('keydown', (event) => {
-    const modalOpen = !$('proxyOverlay').classList.contains('hidden');
+    // Any open modal captures global shortcuts: Ctrl+Enter inside the WSDL URL
+    // dialog must not also send the request currently loaded in the editor.
+    const modalOpen = !!document.querySelector('.modal-overlay:not(.hidden)');
     // While a tree row is being renamed inline, global shortcuts must not fire
     // (the editor also stops its own keydown from bubbling, this is a guard).
     if (modalOpen || isRenaming()) return;
@@ -167,9 +169,12 @@ export function loadNode(node, kind, path = {}) {
       title = '操作：' + (node.name || '') + (count ? '  ·  ' + count + ' 个请求，请选择请求样例' : '  ·  暂无请求样例');
     }
     $('reqTitle').textContent = title;
-    $('endpoint').value = '';
-    $('soapAction').value = '';
-    setRequestBody('', false);
+    // Show the operation's generated template as a preview. Without this a
+    // freshly imported WSDL operation looked completely empty until the user
+    // discovered the "+请求" button; the data was there all along.
+    $('endpoint').value = kind === 'op' ? (node.endpoint || '') : '';
+    $('soapAction').value = kind === 'op' ? (node.soapAction || '') : '';
+    setRequestBody(kind === 'op' ? (node.template || node.request || '') : '', false);
     updateReqBadge();
     updateEditButtons();
     syncSelection();

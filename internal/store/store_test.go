@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -191,5 +193,57 @@ func TestAssignIDsDeep(t *testing.T) {
 	got, _ := s.Get(p.ID)
 	if got.Services[0].ID == "" || got.Services[0].Operations[0].ID == "" || got.Services[0].Operations[0].Calls[0].ID == "" {
 		t.Errorf("nested ids not assigned: %+v", got)
+	}
+}
+
+// TestBackfillsLegacyWSDLCalls covers projects saved by an older build where a
+// WSDL import produced operations but no request samples: loading must create
+// one sample from the template (and stay idempotent on the next load).
+func TestBackfillsLegacyWSDLCalls(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "projects.json")
+	legacy := []model.Project{{
+		ID:     "p1",
+		Name:   "Legacy",
+		Source: "wsdl-url",
+		Services: []model.Service{{
+			ID:   "s1",
+			Name: "Svc",
+			Operations: []model.Operation{{
+				ID:       "o1",
+				Name:     "Hello",
+				Endpoint: "http://example.com/svc",
+				Template: "<Envelope/>",
+			}},
+		}},
+	}}
+	data, err := json.MarshalIndent(legacy, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := s.List()[0]
+	calls := got.Services[0].Operations[0].Calls
+	if len(calls) != 1 {
+		t.Fatalf("calls = %d, want 1 backfilled sample", len(calls))
+	}
+	if calls[0].ID == "" || calls[0].Request != "<Envelope/>" || calls[0].Endpoint != "http://example.com/svc" {
+		t.Errorf("backfilled call = %+v", calls[0])
+	}
+
+	// Reloading the persisted file must not add a second call.
+	s2, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := len(s2.List()[0].Services[0].Operations[0].Calls); n != 1 {
+		t.Errorf("after reload calls = %d, want 1", n)
 	}
 }
