@@ -100,7 +100,7 @@ func TestParseCalc(t *testing.T) {
 func TestNestedComplexType(t *testing.T) {
 	// Build request for the Person element directly through the index.
 	idx := newSchemaIndex(parseSchemasForTest(t, calcWSDL))
-	out := idx.buildRequest("Person", "http://tempuri.org/")
+	out, _ := idx.buildRequest("Person", "http://tempuri.org/")
 	t.Logf("person request:\n%s", out)
 	for _, want := range []string{"<tns:name>", "<tns:age>", "<tns:address", "<tns:street>", "<tns:city>", `country=""`} {
 		if !strings.Contains(out, want) {

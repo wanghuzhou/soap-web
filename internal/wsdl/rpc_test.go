@@ -26,7 +26,7 @@ const rpcWSDL = `<?xml version="1.0" encoding="utf-8"?>
     <soap:binding transport="http://schemas.xmlsoap.org/soap/http" style="rpc"/>
     <operation name="DoThing">
       <soap:operation soapAction="urn:DoThing" style="rpc"/>
-      <input><soap:body use="encoded" namespace="urn:Demo"/></input>
+      <input><soap:body use="encoded" namespace="urn:Demo" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input>
     </operation>
   </binding>
   <service name="Demo">
@@ -49,7 +49,14 @@ func TestParseRPCEncoded(t *testing.T) {
 	if strings.Contains(req, "未找到根元素") {
 		t.Errorf("should not emit placeholder: %s", req)
 	}
-	for _, want := range []string{"<DoThing", "urn:Demo", `<aXml xsi:type="xsd:string">`, "</DoThing>"} {
+	for _, want := range []string{
+		`<soapenv:Envelope`,
+		`xmlns:urn="urn:Demo"`,
+		`<urn:DoThing`,
+		`soapenv:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"`,
+		`<aXml xsi:type="xsd:string">`,
+		`</urn:DoThing>`,
+	} {
 		if !strings.Contains(req, want) {
 			t.Errorf("rpc request missing %q:\n%s", want, req)
 		}

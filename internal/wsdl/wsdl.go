@@ -10,6 +10,7 @@ package wsdl
 import (
 	"encoding/xml"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -47,10 +48,17 @@ type wAddr struct {
 }
 
 type wBinding struct {
-	Name     string    `xml:"name,attr"`
-	Type     string    `xml:"type,attr"`
-	PortType string    `xml:"portType,attr"`
-	Ops      []wBindOp `xml:"operation"`
+	Name        string        `xml:"name,attr"`
+	Type        string        `xml:"type,attr"`
+	PortType    string        `xml:"portType,attr"`
+	SoapBinding []soapBinding `xml:"binding"`
+	Ops         []wBindOp     `xml:"operation"`
+}
+
+// soapBinding is <soap:binding style="rpc|document" transport="..."/>.
+type soapBinding struct {
+	Style     string `xml:"style,attr"`
+	Transport string `xml:"transport,attr"`
 }
 
 type wBindOp struct {
@@ -70,8 +78,10 @@ type wBindIO struct {
 }
 
 type wSOAPBody struct {
-	Use   string  `xml:"use,attr"`
-	Parts []wPart `xml:"part"`
+	Use           string  `xml:"use,attr"`
+	Namespace     string  `xml:"namespace,attr"`
+	EncodingStyle string  `xml:"encodingStyle,attr"`
+	Parts         []wPart `xml:"part"`
 }
 
 type wPortType struct {
@@ -149,14 +159,25 @@ func Parse(data []byte) (*Result, error) {
 		for _, o := range pt.Ops {
 			ptOps[o.Name] = o
 		}
+		bindingStyle := ""
+		if len(b.SoapBinding) > 0 {
+			bindingStyle = b.SoapBinding[0].Style
+		}
 		for _, bo := range b.Ops {
 			op := model.Operation{Name: bo.Name, Endpoint: endpointByBinding[bName]}
 			if len(bo.SoapOp) > 0 {
 				op.SoapAction = bo.SoapOp[0].Action
 				op.Style = bo.SoapOp[0].Style
 			}
+			if op.Style == "" {
+				op.Style = bindingStyle
+			}
+			// Capture the SOAP body attributes: use / namespace / encodingStyle.
+			var bodyNS, encodingStyle string
 			if len(bo.Input) > 0 {
 				op.Use = bo.Input[0].Body.Use
+				bodyNS = strings.TrimSpace(bo.Input[0].Body.Namespace)
+				encodingStyle = strings.TrimSpace(bo.Input[0].Body.EncodingStyle)
 			}
 			// Find the input message to know the request structure.
 			var rootElem string
@@ -170,20 +191,33 @@ func Parse(data []byte) (*Result, error) {
 			}
 			op.InputName = rootElem
 
-			// Decide how to build the request body:
-			//  - If the message exposes an `element=` part and we can resolve it
-			//    against the schema → build it (document/literal).
-			//  - Otherwise (RPC/encoded `type=` parts, or an unresolvable element)
-			//    → build an RPC-style wrapper from the operation and its parts.
+			// Build the payload. document/literal uses the element structure;
+			// rpc/encoded uses an operation wrapper over the message parts.
+			// The chosen namespace comes from soap:body/@namespace for RPC
+			// (which often differs from targetNamespace), else targetNamespace.
 			built := ""
-			if rootElem != "" {
-				built = idx.buildRequest(rootElem, d.TargetNS)
+			decls := []nsDecl{}
+			isRPC := strings.EqualFold(op.Style, "rpc")
+
+			if !isRPC && rootElem != "" {
+				payload, _ := idx.buildRequest(rootElem, d.TargetNS)
+				built = payload
+				// The root element declares its own xmlns:tns binding, so no
+				// Envelope-level declaration is needed here.
 			}
-			if built == "" || isPlaceholder(built) {
-				built = buildRPCRequest(bo.Name, d.TargetNS, parts)
+			if isRPC || built == "" || isPlaceholder(built) {
+				ns := bodyNS
+				if ns == "" {
+					ns = d.TargetNS
+				}
+				prefix := prefixForNS(ns)
+				built = buildRPCRequest(bo.Name, prefix, encodingStyle, parts)
+				if prefix != "" && ns != "" {
+					decls = append(decls, nsDecl{prefix: prefix, uri: ns})
+				}
 			}
 			if !isPlaceholder(built) {
-				built = wrapSOAPEnvelope(built, d.TargetNS)
+				built = wrapSOAPEnvelope(built, decls)
 			}
 			op.Request = built
 			res.Operations = append(res.Operations, op)
@@ -225,9 +259,24 @@ func localName(q string) string {
 	return q
 }
 
+// nsDecl is a namespace prefix binding to declare on the Envelope.
+type nsDecl struct{ prefix, uri string }
+
+// prefixForNS picks a readable prefix for a namespace URI.
+func prefixForNS(uri string) string {
+	if uri == "" {
+		return ""
+	}
+	if strings.HasPrefix(uri, "urn:") {
+		return "urn"
+	}
+	return "tns"
+}
+
 // wrapSOAPEnvelope wraps a request payload element in a SOAP 1.1 Envelope so
-// the template is directly sendable. The payload is indented inside the Body.
-func wrapSOAPEnvelope(payload, ns string) string {
+// the template is directly sendable. Namespace bindings used by the payload are
+// declared on the Envelope (matching how SoapUI-generated requests look).
+func wrapSOAPEnvelope(payload string, decls []nsDecl) string {
 	// Indent every payload line by 6 spaces (inside Envelope>Body).
 	lines := strings.Split(strings.TrimRight(payload, "\n"), "\n")
 	var indented strings.Builder
@@ -237,10 +286,14 @@ func wrapSOAPEnvelope(payload, ns string) string {
 		indented.WriteString("\n")
 	}
 	var b strings.Builder
-	b.WriteString(`<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"`)
-	if ns != "" {
-		b.WriteString(` xmlns:xsd="http://www.w3.org/2001/XMLSchema"`)
-		b.WriteString(` xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"`)
+	b.WriteString(`<soapenv:Envelope xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/"`)
+	seen := map[string]bool{"xsi": true, "xsd": true, "soapenv": true}
+	for _, d := range decls {
+		if d.prefix == "" || d.uri == "" || seen[d.prefix] {
+			continue
+		}
+		seen[d.prefix] = true
+		b.WriteString(fmt.Sprintf(` xmlns:%s="%s"`, d.prefix, d.uri))
 	}
 	b.WriteString(">\n")
 	b.WriteString("   <soapenv:Header/>\n")
@@ -259,31 +312,35 @@ func isPlaceholder(s string) bool {
 }
 
 // buildRPCRequest builds an RPC/encoded style request body: an operation
-// wrapper element containing one child per message part. This handles the
-// common legacy pattern where parts are declared as <part name="x" type="xs:string"/>
-// rather than element-based (document/literal). The body contains only the
-// structural skeleton (empty values), never business data.
-func buildRPCRequest(opName, ns string, parts []wPart) string {
+// wrapper element (namespace-qualified via prefix) carrying the SOAP encoding
+// style, with one child per message part. Handles the legacy pattern where
+// parts are declared as <part name="x" type="xs:string"/> instead of elements.
+// Only the structural skeleton is produced (empty values, no business data).
+func buildRPCRequest(opName, prefix, encodingStyle string, parts []wPart) string {
 	if opName == "" {
 		return "<!-- 无法确定操作名，请手动补全 -->"
 	}
-	var b strings.Builder
-	if ns != "" {
-		b.WriteString("<" + opName + ` xmlns="` + ns + `">` + "\n")
-	} else {
-		b.WriteString("<" + opName + ">\n")
+	qname := opName
+	if prefix != "" {
+		qname = prefix + ":" + opName
 	}
+	attr := ""
+	if encodingStyle != "" {
+		attr = fmt.Sprintf(` soapenv:encodingStyle="%s"`, encodingStyle)
+	}
+	var b strings.Builder
+	b.WriteString("<" + qname + attr + ">\n")
 	for _, p := range parts {
 		name := p.Name
 		if name == "" {
 			name = "param"
 		}
 		if p.Type != "" {
-			b.WriteString("  <" + name + ` xsi:type="xsd:` + localName(p.Type) + `">` + "</" + name + ">\n")
+			b.WriteString("   <" + name + ` xsi:type="xsd:` + localName(p.Type) + `">` + "</" + name + ">\n")
 		} else {
-			b.WriteString("  <" + name + "></" + name + ">\n")
+			b.WriteString("   <" + name + "></" + name + ">\n")
 		}
 	}
-	b.WriteString("</" + opName + ">")
+	b.WriteString("</" + qname + ">")
 	return b.String()
 }

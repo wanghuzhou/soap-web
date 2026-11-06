@@ -87,24 +87,28 @@ type xsEnum struct {
 
 // schemaIndex holds all schemas flattened for lookup by element/type name.
 type schemaIndex struct {
-	elements map[string]xsElement
-	types    map[string]xsComplexType
-	simples  map[string]xsSimpleType
-	rootNS   map[string]string // name -> targetNamespace (for prefix hints)
+	elements      map[string]xsElement
+	types         map[string]xsComplexType
+	simples       map[string]xsSimpleType
+	rootNS        map[string]string // name -> targetNamespace
+	elemQualified map[string]bool   // name -> elementFormDefault=qualified
 }
 
 func newSchemaIndex(schemas []schemaElem) *schemaIndex {
 	idx := &schemaIndex{
-		elements: map[string]xsElement{},
-		types:    map[string]xsComplexType{},
-		simples:  map[string]xsSimpleType{},
-		rootNS:   map[string]string{},
+		elements:      map[string]xsElement{},
+		types:         map[string]xsComplexType{},
+		simples:       map[string]xsSimpleType{},
+		rootNS:        map[string]string{},
+		elemQualified: map[string]bool{},
 	}
 	for _, s := range schemas {
+		qualified := strings.EqualFold(strings.TrimSpace(s.ElementForm), "qualified")
 		for _, e := range s.Elements {
 			if e.Name != "" {
 				idx.elements[e.Name] = e
 				idx.rootNS[e.Name] = s.TargetNS
+				idx.elemQualified[e.Name] = qualified
 			}
 		}
 		for _, t := range s.ComplexTypes {
@@ -122,36 +126,37 @@ func newSchemaIndex(schemas []schemaElem) *schemaIndex {
 }
 
 // buildRequest generates an XML request template for the given root element.
-// Elements are emitted with a "tns:" prefix bound to targetNS, matching common
-// document/literal SOAP services that require a namespace-qualified body.
-func (idx *schemaIndex) buildRequest(rootElem, targetNS string) string {
+// It returns the payload and the prefix bound to targetNS ("" when no
+// namespace is used). The root element is namespace-qualified; descendants are
+// prefixed only when the schema declares elementFormDefault="qualified".
+func (idx *schemaIndex) buildRequest(rootElem, targetNS string) (string, string) {
 	if rootElem == "" {
-		return "<!-- 未能确定请求根元素，请手动编写 -->"
+		return "<!-- 未能确定请求根元素，请手动编写 -->", ""
 	}
 	el, ok := idx.elements[rootElem]
 	if !ok {
 		// root not found in embedded schema; emit a minimal wrapper guess.
-		return fmt.Sprintf(`<!-- 未找到根元素 %s 的 schema 定义，请手动补全 -->`, rootElem)
+		return fmt.Sprintf(`<!-- 未找到根元素 %s 的 schema 定义，请手动补全 -->`, rootElem), ""
 	}
-	var b strings.Builder
-	// Root declares the tns prefix; all descendant elements reuse it.
-	qname := rootElem
+	prefix := ""
+	rootQName := rootElem
 	if targetNS != "" {
-		qname = "tns:" + rootElem
+		prefix = "tns"
+		rootQName = prefix + ":" + rootElem
 	}
-	idx.writeElementRoot(&b, el, qname, rootElem, targetNS, 0)
-	return b.String()
+	qualified := idx.elemQualified[rootElem]
+	var b strings.Builder
+	idx.writeRoot(&b, el, rootQName, prefix, targetNS, qualified, 0)
+	return b.String(), prefix
 }
 
-// writeElementRoot writes the root element, adding the xmlns:tns declaration
-// when a namespace is present.
-func (idx *schemaIndex) writeElementRoot(b *strings.Builder, el xsElement, qname, localNm, targetNS string, depth int) {
+// writeRoot writes the root element, declaring xmlns:<prefix> inline when a
+// namespace is present.
+func (idx *schemaIndex) writeRoot(b *strings.Builder, el xsElement, qname, prefix, targetNS string, qualified bool, depth int) {
 	indent := strings.Repeat("  ", depth)
 	nsDecl := ""
-	prefix := ""
-	if targetNS != "" {
-		nsDecl = fmt.Sprintf(` xmlns:tns="%s"`, targetNS)
-		prefix = "tns:"
+	if prefix != "" && targetNS != "" {
+		nsDecl = fmt.Sprintf(` xmlns:%s="%s"`, prefix, targetNS)
 	}
 	ct := el.Complex
 	typeName := localName(el.Type)
@@ -175,19 +180,23 @@ func (idx *schemaIndex) writeElementRoot(b *strings.Builder, el xsElement, qname
 	}
 	b.WriteString(fmt.Sprintf("%s<%s%s%s>\n", indent, qname, nsDecl, attrStr))
 	for _, ch := range children {
-		idx.writeElementQualified(b, ch, prefix, depth+1)
+		idx.writeChild(b, ch, prefix, qualified, depth+1)
 	}
 	b.WriteString(fmt.Sprintf("%s</%s>\n", indent, qname))
 }
 
-// writeElementQualified writes a descendant element with the given prefix.
-func (idx *schemaIndex) writeElementQualified(b *strings.Builder, el xsElement, prefix string, depth int) {
-	indent := strings.Repeat("  ", depth)
-	name := prefix + localName(el.Name)
-	if name == prefix {
-		// empty local name; skip
+// writeChild writes a descendant element. When the schema is qualified the
+// element name carries the same prefix as the root; otherwise it is plain.
+func (idx *schemaIndex) writeChild(b *strings.Builder, el xsElement, prefix string, qualified bool, depth int) {
+	local := localName(el.Name)
+	if local == "" {
 		return
 	}
+	name := local
+	if qualified && prefix != "" {
+		name = prefix + ":" + local
+	}
+	indent := strings.Repeat("  ", depth)
 	ct := el.Complex
 	typeName := localName(el.Type)
 	if ct == nil && typeName != "" {
@@ -210,7 +219,7 @@ func (idx *schemaIndex) writeElementQualified(b *strings.Builder, el xsElement, 
 	}
 	b.WriteString(fmt.Sprintf("%s<%s%s>\n", indent, name, attrStr))
 	for _, ch := range children {
-		idx.writeElementQualified(b, ch, prefix, depth+1)
+		idx.writeChild(b, ch, prefix, qualified, depth+1)
 	}
 	b.WriteString(fmt.Sprintf("%s</%s>\n", indent, name))
 }
