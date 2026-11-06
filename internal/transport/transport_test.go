@@ -28,6 +28,9 @@ func TestSendDirectIgnoresEnvironmentProxy(t *testing.T) {
 	if resp.Body != "direct-ok" {
 		t.Errorf("body = %q", resp.Body)
 	}
+	if resp.StatusText != "OK" {
+		t.Errorf("statusText = %q, want OK", resp.StatusText)
+	}
 }
 
 // TestSendCustomHTTPProxy verifies traffic goes through the configured HTTP

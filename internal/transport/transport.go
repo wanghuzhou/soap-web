@@ -78,12 +78,12 @@ func Send(req model.SendRequest, proxyCfg *model.ProxySettings) model.SendRespon
 	if err != nil {
 		out.Error = "读取响应失败: " + err.Error()
 		out.Status = resp.StatusCode
-		out.StatusText = resp.Status
+		out.StatusText = http.StatusText(resp.StatusCode)
 		return out
 	}
 
 	out.Status = resp.StatusCode
-	out.StatusText = resp.Status
+	out.StatusText = http.StatusText(resp.StatusCode)
 	out.Body = string(body)
 	out.Size = len(body)
 	for k, vals := range resp.Header {
