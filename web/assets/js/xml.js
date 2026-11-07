@@ -164,17 +164,63 @@ function contentHasText(tokens, from, to) {
   return false;
 }
 
-// Minify XML: strip whitespace between tags while preserving CDATA/comments.
+// NEWLINE_RUN_RE matches a whitespace run that contains a newline. Inside text
+// such a run is always formatting: XML attribute value normalisation already
+// turns a newline in an attribute into a space, so no payload depends on one.
+// Collapsing it to a single space is exactly what parsing would have produced.
+//
+// Horizontal runs ([ \t]+ with no newline) are deliberately left alone: they
+// may be real content, e.g. a column-aligned signature or an indented first
+// line of a text payload.
+const NEWLINE_RUN_RE = /[ \t\r\n]*\n[ \t\r\n]*/g;
+
+// CDATA_OPEN / CDATA_CLOSE delimit a CDATA section. Kept as constants so the
+// minifier never accidentally truncates a payload whose data ends in "]".
+const CDATA_OPEN = '<![CDATA[';
+const CDATA_CLOSE = ']]>';
+
+// Minify XML: emit the token stream on a single line.
+//
+// Minifying means removing formatting whitespace. The only whitespace that is
+// certainly formatting is what contains a newline, and that criterion is
+// context independent, which is what makes minifying safe on content whose
+// meaning we cannot judge (mixed content, xml:space="preserve", base64 blobs).
+//
+// Each region is therefore handled as its own case:
+//   * between tags -> dropped entirely;
+//   * text (CDATA / plain) -> a newline-carrying run collapses to one space;
+//   * comments / processing instructions / tags -> kept verbatim.
+//
+// The previous implementation hid comments and CDATA behind \u0000N\u0000
+// placeholders and then ran />\s+</ over the rest. That failed twice:
+//   * the placeholder sits between ">" and "<", so />\s+</ no longer matched
+//     and the whitespace around every comment/CDATA survived — the result was
+//     not minified at all;
+//   * a whole CDATA section was kept as one opaque token, so a SOAP call whose
+//     payload lives inside <![CDATA[...]]> (the normal shape of a SoapUI
+//     sample, e.g. "5.6.3 获取医院信息") kept all of its line breaks.
+//
+// Tokenising once, which is what prettyXML and highlightXML already do, handles
+// every case without placeholders and in linear time.
 export function minifyXML(xml) {
   const text = xml == null ? '' : xml;
-  const store = [];
-  let s = text.replace(/<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->/g, (match) => {
-    store.push(match);
-    return '\u0000' + (store.length - 1) + '\u0000';
-  });
-  s = s.replace(/>\s+</g, '><').trim();
-  s = s.replace(/\u0000(\d+)\u0000/g, (_, index) => store[+index]);
-  return s;
+  if (!text.trim()) return text;
+
+  let out = '';
+  const tokens = text.match(TOKEN_RE) || [];
+  for (const token of tokens) {
+    if (token.startsWith(CDATA_OPEN)) {
+      // Keep the section delimiters; squeeze only the payload in between.
+      const inner = token.slice(CDATA_OPEN.length, token.length - CDATA_CLOSE.length);
+      out += CDATA_OPEN + inner.replace(NEWLINE_RUN_RE, ' ') + CDATA_CLOSE;
+    } else if (token.startsWith('<')) {
+      out += token;
+    } else {
+      // Plain text: collapse formatting newlines, drop surrounding whitespace.
+      out += token.replace(NEWLINE_RUN_RE, ' ').trim();
+    }
+  }
+  return out.trim();
 }
 
 // ATTR_RE matches name="value" / name='value' inside a tag. The tag text is

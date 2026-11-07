@@ -131,6 +131,62 @@ check('minifyXML strips inter-tag whitespace', minifyXML('<a>\n  <b/>\n</a>'), '
 check('minifyXML keeps CDATA', minifyXML('<a><![CDATA[ x < y ]]></a>'), '<a><![CDATA[ x < y ]]></a>');
 check('minifyXML keeps comments', minifyXML('<a><!-- c --></a>'), '<a><!-- c --></a>');
 
+// Regression (5.6.3 获取医院信息): a SoapUI sample keeps the SOAP payload inside
+// <![CDATA[...]]>, and the minifier used to freeze the whole section. A
+// formatted, multi-line CDATA body must come out on one line.
+const multilineCDATA = [
+  '<env:Envelope>',
+  '  <env:Body>',
+  '    <aXml><![CDATA[<hywebserviceroot>',
+  '      <funname>gethospitalinfo</funname>',
+  '      <hospitalid>H1504080000001</hospitalid>',
+  '    </hywebserviceroot>]]></aXml>',
+  '  </env:Body>',
+  '</env:Envelope>',
+].join('\n');
+check(
+  'minifyXML collapses a multi-line CDATA payload',
+  minifyXML(multilineCDATA),
+  '<env:Envelope><env:Body><aXml><![CDATA[<hywebserviceroot> <funname>gethospitalinfo</funname>'
+    + ' <hospitalid>H1504080000001</hospitalid> </hywebserviceroot>]]></aXml></env:Body></env:Envelope>',
+);
+checkTrue(
+  'minifyXML output with CDATA stays on one line',
+  !minifyXML(multilineCDATA).includes('\n'),
+  minifyXML(multilineCDATA),
+);
+
+// Regression: the old placeholder \u0000N\u0000 sat between ">" and "<", so the
+// whitespace around a comment or CDATA was never removed.
+check(
+  'minifyXML strips whitespace around a comment',
+  minifyXML('<a>\n  <!-- c -->\n  <b/>\n</a>'),
+  '<a><!-- c --><b/></a>',
+);
+check(
+  'minifyXML strips whitespace around CDATA',
+  minifyXML('<a>\n  <b><![CDATA[x]]></b>\n  <c/>\n</a>'),
+  '<a><b><![CDATA[x]]></b><c/></a>',
+);
+
+// Every CDATA section is handled independently, and horizontal whitespace that
+// may be real data (an indented first line, column-aligned text) is preserved.
+check(
+  'minifyXML handles several CDATA sections',
+  minifyXML('<a>\n  <b><![CDATA[<x>\n 1\n</x>]]></b>\n  <c><![CDATA[<z>2</z>]]></c>\n</a>'),
+  '<a><b><![CDATA[<x> 1 </x>]]></b><c><![CDATA[<z>2</z>]]></c></a>',
+);
+check(
+  'minifyXML keeps horizontal whitespace in CDATA',
+  minifyXML('<a><![CDATA[  sig 0012 ]]></a>'),
+  '<a><![CDATA[  sig 0012 ]]></a>',
+);
+check('minifyXML keeps ]] inside CDATA text', minifyXML('<a><![CDATA[ a ]] b ]]></a>'), '<a><![CDATA[ a ]] b ]]></a>');
+check('minifyXML keeps a PI', minifyXML('<?xml version="1.0"?>\n<a/>'), '<?xml version="1.0"?><a/>');
+check('minifyXML trims text padding', minifyXML('<a>  abc  </a>'), '<a>abc</a>');
+check('minifyXML collapses text newlines to a space', minifyXML('<a>line1\nline2</a>'), '<a>line1 line2</a>');
+check('minifyXML tolerates empty input', minifyXML('   '), '   ');
+
 // ---- highlightXML ----------------------------------------------------------
 // The highlighter must escape markup so user data cannot inject HTML.
 const xss = '<r><a>&lt;script&gt;alert(1)&lt;/script&gt;</a></r>';
