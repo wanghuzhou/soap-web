@@ -1,0 +1,157 @@
+name: Release Build
+
+# 在 GitHub 网页上点击 "Publish release" 时触发。
+# workflow_dispatch 仅用于手动补传 / 重跑（需填写一个已存在的 release tag）。
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '已发布的 release tag，例如 v1.0.0'
+        required: true
+        type: string
+
+# 默认只读；只有最后的 publish job 需要写权限。
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 1) 交叉编译 + 分平台打包
+  #    全部在 ubuntu-latest 上跑：CGO_ENABLED=0 保证纯 Go 项目能交叉编译出
+  #    Windows / macOS 二进制，无需各自的 runner，zip/tar 命令也统一。
+  # ---------------------------------------------------------------------------
+  build:
+    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 只要三个平台各一个包的话，删掉对应的 arm64 行即可。
+        include:
+          - { goos: windows, goarch: amd64, ext: '.exe', pack: zip }
+          - { goos: windows, goarch: arm64, ext: '.exe', pack: zip }
+          - { goos: linux,   goarch: amd64, ext: '',     pack: tar.gz }
+          - { goos: linux,   goarch: arm64, ext: '',     pack: tar.gz }
+          - { goos: darwin,  goarch: amd64, ext: '',     pack: zip }
+          - { goos: darwin,  goarch: arm64, ext: '',     pack: zip }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # release 事件下默认就是该 tag，这里显式写出以便手动重跑时也检出 tag 代码
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod   # 读取 go 1.27.1；若 runner 未收录可改为 go-version: '1.27.1'
+          cache: true
+
+      - name: Cross-compile
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+          EXT: ${{ matrix.ext }}
+        run: |
+          set -euo pipefail
+          SAFE_TAG="${TAG//\//-}"   # tag 里可能含 /，不能出现在文件名中
+          NAME="soap-web_${SAFE_TAG}_${GOOS}_${GOARCH}"
+          STAGE="dist/${NAME}"
+          mkdir -p "${STAGE}/bin"
+          go build -trimpath -ldflags='-s -w' -o "${STAGE}/bin/soapweb${EXT}" ./cmd/soapweb
+          cp README.md "${STAGE}/"
+
+      - name: Package
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          PACK: ${{ matrix.pack }}
+        run: |
+          set -euo pipefail
+          SAFE_TAG="${TAG//\//-}"   # tag 里可能含 /，不能出现在文件名中
+          NAME="soap-web_${SAFE_TAG}_${GOOS}_${GOARCH}"
+          STAGE="dist/${NAME}"
+
+          # zip / tar 都会保留可执行位（macOS 解压后可直接运行）
+          chmod 755 "${STAGE}/bin/"*
+
+          if [ "$GOOS" = "windows" ]; then
+            # 生成纯 ASCII 名的启动脚本：避免 zip 内中文文件名在 Windows 解压时乱码，
+            # 也避免 bat 里的中文提示在非 UTF-8 控制台显示乱码。
+            # 目录结构 bin/soapweb.exe 与项目自带的启动脚本约定一致。
+            printf '%s\r\n' \
+              '@echo off' \
+              'setlocal' \
+              'cd /d "%~dp0"' \
+              'if not exist "bin\soapweb.exe" (' \
+              '  echo [ERROR] bin\soapweb.exe not found.' \
+              '  pause' \
+              '  exit /b 1' \
+              ')' \
+              '"bin\soapweb.exe" -addr 127.0.0.1:8420 -data "bin\data\projects.json" %*' \
+              > "${STAGE}/start.bat"
+          else
+            cp start.sh "${STAGE}/"
+            chmod 755 "${STAGE}/start.sh"
+          fi
+
+          if [ "$GOOS" = "darwin" ]; then
+            # GitHub 下载的文件会带 quarantine 属性，附一份排障说明
+            printf '%s\n' \
+              'If macOS blocks the app ("unidentified developer"), run this once:' \
+              '' \
+              '    xattr -dr com.apple.quarantine <this-folder>' \
+              '' \
+              'Then start with:  bash start.sh' \
+              > "${STAGE}/MACOS-README.txt"
+          fi
+
+          case "$PACK" in
+            zip)    ( cd dist && zip -qr "${NAME}.zip" "${NAME}" ) ;;
+            tar.gz) ( cd dist && tar -czf "${NAME}.tar.gz" "${NAME}" ) ;;
+          esac
+          rm -rf "${STAGE}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: soap-web-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.zip
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 2) 汇总所有包，一次性上传到 release（避免 6 个 job 并发写同一 release）
+  # ---------------------------------------------------------------------------
+  publish:
+    name: Attach assets to release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: soap-web-*
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS.txt
+        run: |
+          set -euo pipefail
+          ( cd dist && sha256sum *.zip *.tar.gz > SHA256SUMS.txt )
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(dist/*.zip dist/*.tar.gz dist/SHA256SUMS.txt)
+          gh release upload "$TAG" "${files[@]}" \
+            --repo "$GITHUB_REPOSITORY" --clobber
