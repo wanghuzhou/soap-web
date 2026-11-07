@@ -3,6 +3,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"soapweb/internal/soapuiproj"
 	"soapweb/internal/store"
 	"soapweb/internal/transport"
+	"soapweb/internal/workspace"
 	"soapweb/internal/wsdl"
 	"soapweb/internal/wsdlfetch"
 )
@@ -25,23 +27,91 @@ import (
 type Server struct {
 	// StaticFS is the embedded frontend filesystem (rooted at web/).
 	StaticFS http.FileSystem
-	// Store persists imported and user-created projects.
-	Store *store.Store
+	// Workspaces owns settings.json and the active project store.
+	Workspaces *workspace.Registry
 }
 
 // Register attaches all routes to mux. Routes use Go's method + wildcard
 // patterns so each handler owns exactly one operation and path parameters are
 // read with r.PathValue.
+//
+// API handlers run behind withWorkspace, which pins each request to the
+// workspace that was active when it started and rejects writes from a tab that
+// still points at a workspace the server has since switched away from.
 func (s *Server) Register(mux *http.ServeMux) {
-	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.HandleFunc("POST /api/send", s.handleSend)
-	mux.HandleFunc("POST /api/import/soapui", s.handleImportSoapUI)
-	mux.HandleFunc("POST /api/wsdl/parse", s.handleParseWSDL)
-	mux.HandleFunc("POST /api/wsdl/fetch", s.handleFetchWSDL)
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("GET /api/health", s.handleHealth)
+	apiMux.HandleFunc("POST /api/send", s.handleSend)
+	apiMux.HandleFunc("POST /api/import/soapui", s.handleImportSoapUI)
+	apiMux.HandleFunc("POST /api/wsdl/parse", s.handleParseWSDL)
+	apiMux.HandleFunc("POST /api/wsdl/fetch", s.handleFetchWSDL)
 
-	s.registerProjectRoutes(mux)
+	s.registerProjectRoutes(apiMux)
+	s.registerWorkspaceRoutes(apiMux)
 
-	mux.Handle("GET /", staticHandler(s.StaticFS))
+	mux.Handle("/api/", s.withWorkspace(apiMux))
+	mux.Handle("/", staticHandler(s.StaticFS))
+}
+
+// workspaceHeader identifies the workspace a request was issued against. The
+// frontend sends it with every API call; a mismatch means another tab switched
+// workspaces in the meantime.
+const workspaceHeader = "X-Workspace-Id"
+
+// requestWorkspace is the store/info pair a single request operates on. It is
+// captured once, at the start of the request, so a long WSDL import keeps
+// writing to the workspace it started in even if the user switches meanwhile.
+type requestWorkspace struct {
+	store *store.Store
+	info  workspace.Info
+}
+
+type requestWorkspaceKey struct{}
+
+// withWorkspace pins the request to the active workspace.
+func (s *Server) withWorkspace(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		st, info := s.Workspaces.Active()
+
+		// The workspace endpoints themselves, and health, must stay reachable
+		// from a stale tab: health is how it discovers the switch, and the
+		// workspace API is how it recovers.
+		if !workspaceExempt(r.URL.Path) {
+			if want := r.Header.Get(workspaceHeader); want != "" && want != info.ID {
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":     "工作空间已在其他窗口切换，请先同步后再操作",
+					"code":      "workspace_mismatch",
+					"workspace": s.Workspaces.CurrentInfo(),
+				})
+				return
+			}
+		}
+
+		w.Header().Set(workspaceHeader, info.ID)
+		ctx := context.WithValue(r.Context(), requestWorkspaceKey{}, requestWorkspace{store: st, info: info})
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// workspaceExempt reports whether a path bypasses the stale-workspace check.
+func workspaceExempt(path string) bool {
+	return path == "/api/health" || path == "/api/workspaces" || strings.HasPrefix(path, "/api/workspaces/")
+}
+
+// workspaceFrom returns the workspace captured for this request. Every API
+// handler is mounted behind withWorkspace, so a missing value is a programming
+// error rather than a client error.
+func workspaceFrom(r *http.Request) requestWorkspace {
+	rw, _ := r.Context().Value(requestWorkspaceKey{}).(requestWorkspace)
+	if rw.store == nil {
+		panic("api: handler reached without workspace context")
+	}
+	return rw
+}
+
+// storeFrom is the common shorthand for the request's project store.
+func storeFrom(r *http.Request) *store.Store {
+	return workspaceFrom(r).store
 }
 
 // staticHandler serves the embedded frontend with explicit cache headers.
@@ -154,7 +224,12 @@ func decodeJSON[T any](w http.ResponseWriter, r *http.Request) (T, bool) {
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	// The workspace rides along so the frontend's 10-second heartbeat notices a
+	// switch made in another tab without polling the workspace list.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":    "ok",
+		"workspace": s.Workspaces.CurrentInfo(),
+	})
 }
 
 // handleSend executes a raw HTTP/SOAP call.
@@ -170,7 +245,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	// Resolve the project's proxy settings (if the request belongs to a project).
 	var proxyCfg *model.ProxySettings
 	if req.ProjectID != "" {
-		if p, err := s.Store.Get(req.ProjectID); err == nil {
+		if p, err := storeFrom(r).Get(req.ProjectID); err == nil {
 			proxyCfg = p.Proxy
 		}
 	}
@@ -192,12 +267,17 @@ func (s *Server) handleImportSoapUI(w http.ResponseWriter, r *http.Request) {
 	if project.Name == "" {
 		project.Name = name
 	}
-	saved, err := s.Store.AddProject(*project)
+	saved, err := storeFrom(r).AddProject(*project)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "保存工程失败: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, saved)
+	// workspaceId tells the client where a long-running import landed when the
+	// workspace was switched while the upload was in flight.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"project":     saved,
+		"workspaceId": workspaceFrom(r).info.ID,
+	})
 }
 
 // handleParseWSDL parses a WSDL and persists it as a new project containing a
@@ -222,14 +302,15 @@ func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "解析 WSDL 失败: "+err.Error())
 		return
 	}
-	saved, err := s.persistWSDLProject(service, name, name, "wsdl")
+	saved, err := s.persistWSDLProject(storeFrom(r), service, name, name, "wsdl")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "保存 WSDL 工程失败: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"service": service,
-		"project": saved,
+		"service":     service,
+		"project":     saved,
+		"workspaceId": workspaceFrom(r).info.ID,
 	})
 }
 
@@ -263,7 +344,7 @@ func (s *Server) handleFetchWSDL(w http.ResponseWriter, r *http.Request) {
 		}
 		proxyCfg = req.Proxy
 	case req.ProjectID != "":
-		if p, err := s.Store.Get(req.ProjectID); err == nil {
+		if p, err := storeFrom(r).Get(req.ProjectID); err == nil {
 			proxyCfg = p.Proxy
 			if proxyCfg == nil {
 				// A project without explicit settings means "system proxy".
@@ -295,16 +376,17 @@ func (s *Server) handleFetchWSDL(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnprocessableEntity, "解析 WSDL 失败: "+err.Error())
 		return
 	}
-	project, err := s.persistWSDLProject(service, fetched.Name, fetched.FinalURL, "wsdl-url")
+	project, err := s.persistWSDLProject(storeFrom(r), service, fetched.Name, fetched.FinalURL, "wsdl-url")
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "保存 WSDL 工程失败: "+err.Error())
 		return
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"service": service,
-		"project": project,
-		"url":     fetched.FinalURL,
+		"service":     service,
+		"project":     project,
+		"url":         fetched.FinalURL,
+		"workspaceId": workspaceFrom(r).info.ID,
 	})
 }
 
@@ -317,7 +399,7 @@ func (s *Server) handleFetchWSDL(w http.ResponseWriter, r *http.Request) {
 // creates a request per operation on WSDL import, and without it opening a
 // freshly imported project shows an empty editor until the user manually adds
 // one — which looks exactly like "the import failed" to a first-time user.
-func (s *Server) persistWSDLProject(service *wsdl.Result, fallbackName, source, projectSource string) (model.Project, error) {
+func (s *Server) persistWSDLProject(st *store.Store, service *wsdl.Result, fallbackName, source, projectSource string) (model.Project, error) {
 	serviceName := service.Name
 	if serviceName == "" {
 		serviceName = fallbackName
@@ -360,7 +442,7 @@ func (s *Server) persistWSDLProject(service *wsdl.Result, fallbackName, source, 
 	if project.Name == "" {
 		project.Name = "WSDL 工程"
 	}
-	return s.Store.AddProject(project)
+	return st.AddProject(project)
 }
 
 // isJSONRequest reports whether the request body is JSON.

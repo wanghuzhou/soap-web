@@ -6,21 +6,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"testing"
 
 	"soapweb/internal/model"
-	"soapweb/internal/store"
 )
 
 // TestSendUsesProjectProxy verifies that /api/send resolves the project's proxy
 // settings and routes the request through the configured proxy.
 func TestSendUsesProjectProxy(t *testing.T) {
-	dir := t.TempDir()
-	st, err := store.New(filepath.Join(dir, "projects.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, mux, st := newTestServer(t)
 
 	// A fake HTTP proxy that answers every request with a marker body.
 	proxySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,10 +35,6 @@ func TestSendUsesProjectProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	srv := &Server{Store: st}
-	mux := http.NewServeMux()
-	srv.Register(mux)
 
 	body, _ := json.Marshal(model.SendRequest{
 		ProjectID: proj.ID,
@@ -74,13 +64,8 @@ func TestSendUsesProjectProxy(t *testing.T) {
 
 // TestSaveProjectRejectsInvalidProxy verifies validation on project update.
 func TestSaveProjectRejectsInvalidProxy(t *testing.T) {
-	dir := t.TempDir()
-	st, _ := store.New(filepath.Join(dir, "projects.json"))
+	_, mux, st := newTestServer(t)
 	p, _ := st.AddProject(model.Project{Name: "p"})
-
-	srv := &Server{Store: st}
-	mux := http.NewServeMux()
-	srv.Register(mux)
 
 	bad := *p2ptr(p)
 	bad.Proxy = &model.ProxySettings{Mode: "custom", Type: "http", Host: "", Port: 0}
@@ -96,14 +81,7 @@ func TestSaveProjectRejectsInvalidProxy(t *testing.T) {
 }
 
 func TestNestedProjectCRUDRoutes(t *testing.T) {
-	dir := t.TempDir()
-	st, err := store.New(filepath.Join(dir, "projects.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv := &Server{Store: st}
-	mux := http.NewServeMux()
-	srv.Register(mux)
+	_, mux, st := newTestServer(t)
 
 	request := func(method, path string, payload any, out any) *httptest.ResponseRecorder {
 		t.Helper()

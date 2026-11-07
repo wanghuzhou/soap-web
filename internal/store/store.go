@@ -235,9 +235,17 @@ func indexOfProject(list []model.Project, id string) int {
 }
 
 // List returns a deep copy of all projects.
+//
+// An empty store returns an empty slice, not nil: with workspaces, "this
+// workspace has no projects yet" is a normal state, and the API should answer
+// [] rather than null so clients can treat the response as a list
+// unconditionally.
 func (s *Store) List() []model.Project {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.projects == nil {
+		return []model.Project{}
+	}
 	return cloneProjects(s.projects)
 }
 

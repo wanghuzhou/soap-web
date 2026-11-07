@@ -121,6 +121,11 @@ export function isDirty() {
   return !!textarea && textarea.value !== loadedSnapshot;
 }
 
+// isSending reports whether a request is currently in flight.
+export function isSending() {
+  return sending;
+}
+
 // clearResponseIfOther drops the response pane when the user selects a
 // different request sample, so a stale response is never mistaken for the
 // current one. Re-selecting the same sample keeps its response.
@@ -209,6 +214,42 @@ export function updateEditButtons() {
   btnSend.disabled = sending ? false : !isCall;
   btnSend.textContent = sending ? '取消' : '发送';
   btnSend.classList.toggle('is-cancel', sending);
+}
+
+// cancelSend aborts an in-flight request and invalidates its completion.
+//
+// Bumping sendSeq makes the aborted request's catch/finally no-ops, so it
+// cannot repaint the "已取消" state after the caller has already reset the
+// editor (which is what happens on a workspace switch).
+export function cancelSend() {
+  if (abortController) abortController.abort();
+  sendSeq++;
+  sending = false;
+  abortController = null;
+  updateEditButtons();
+}
+
+// resetEditor clears the editor and response pane without touching the tree.
+// Called when the active workspace changes: the old selection and its response
+// belong to projects that are no longer loaded.
+export function resetEditor() {
+  state.selected = null;
+  state.response = null;
+  loadedSnapshot = '';
+  const title = $('reqTitle');
+  if (title) title.textContent = '未选择请求';
+  const endpoint = $('endpoint');
+  if (endpoint) endpoint.value = '';
+  const action = $('soapAction');
+  if (action) action.value = '';
+  const body = $('requestBody');
+  if (body) body.value = '';
+  const info = $('sendInfo');
+  if (info) info.textContent = '';
+  renderHighlight();
+  updateReqBadge();
+  updateEditButtons();
+  renderResponse();
 }
 
 function formatBody() {

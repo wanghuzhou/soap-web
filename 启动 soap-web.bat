@@ -11,7 +11,7 @@ if not exist "%EXE%" goto :try_go
 echo Starting soap-web at http://%ADDR% ...
 echo Browser will open automatically. Close this window to stop.
 echo.
-"%EXE%" -addr "%ADDR%" -data "%SCRIPT_DIR%bin\data\projects.json" %*
+"%EXE%" -addr "%ADDR%" -data "%SCRIPT_DIR%bin\data" %*
 if errorlevel 1 goto :try_go
 goto :end
 
@@ -23,7 +23,7 @@ echo [WARN] Trying to run from source with Go...
 echo.
 where go >nul 2>nul
 if errorlevel 1 goto :no_go
-go run "%SCRIPT_DIR%cmd\soapweb" -addr "%ADDR%" -data "%SCRIPT_DIR%bin\data\projects.json" %*
+go run "%SCRIPT_DIR%cmd\soapweb" -addr "%ADDR%" -data "%SCRIPT_DIR%bin\data" %*
 goto :end
 
 :no_go

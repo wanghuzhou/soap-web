@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -38,13 +37,7 @@ const remoteWSDLForURLImport = `<?xml version="1.0" encoding="UTF-8"?>
 
 func newWSDLImportTestServer(t *testing.T) (*http.ServeMux, *store.Store) {
 	t.Helper()
-	st, err := store.New(filepath.Join(t.TempDir(), "projects.json"))
-	if err != nil {
-		t.Fatalf("store.New: %v", err)
-	}
-	srv := &Server{Store: st}
-	mux := http.NewServeMux()
-	srv.Register(mux)
+	_, mux, st := newTestServer(t)
 	return mux, st
 }
 

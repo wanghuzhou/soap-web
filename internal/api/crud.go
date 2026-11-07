@@ -10,6 +10,10 @@ import (
 
 // registerProjectRoutes declares the nested project/service/operation/call CRUD
 // surface. Wildcards are read with r.PathValue in each handler.
+//
+// Every handler resolves the request's workspace store with storeFrom(r); the
+// project routes themselves are workspace-agnostic, which is what lets a
+// workspace switch reuse the entire existing API unchanged.
 func (s *Server) registerProjectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/projects", s.handleListProjects)
 	mux.HandleFunc("POST /api/projects", s.handleCreateProject)
@@ -33,8 +37,8 @@ func (s *Server) registerProjectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("DELETE /api/projects/{pid}/services/{sid}/operations/{oid}/calls/{cid}", s.handleDeleteCall)
 }
 
-func (s *Server) handleListProjects(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.Store.List())
+func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, storeFrom(r).List())
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +50,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
 		return
 	}
-	saved, err := s.Store.AddProject(project)
+	saved, err := storeFrom(r).AddProject(project)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -55,7 +59,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
-	project, err := s.Store.Get(r.PathValue("pid"))
+	project, err := storeFrom(r).Get(r.PathValue("pid"))
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -73,7 +77,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
 		return
 	}
-	if err := s.Store.UpdateProject(project); err != nil {
+	if err := storeFrom(r).UpdateProject(project); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
@@ -81,7 +85,7 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteProject(r.PathValue("pid")); err != nil {
+	if err := storeFrom(r).DeleteProject(r.PathValue("pid")); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
@@ -100,7 +104,7 @@ func (s *Server) handleUpdateProjectProxy(w http.ResponseWriter, r *http.Request
 		writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
 		return
 	}
-	if err := s.Store.UpdateProjectProxy(r.PathValue("pid"), proxy); err != nil {
+	if err := storeFrom(r).UpdateProjectProxy(r.PathValue("pid"), proxy); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
@@ -109,7 +113,7 @@ func (s *Server) handleUpdateProjectProxy(w http.ResponseWriter, r *http.Request
 
 // handleExportProject serialises a project as SoapUI-compatible XML for download.
 func (s *Server) handleExportProject(w http.ResponseWriter, r *http.Request) {
-	project, err := s.Store.Get(r.PathValue("pid"))
+	project, err := storeFrom(r).Get(r.PathValue("pid"))
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -134,7 +138,7 @@ func (s *Server) handleAddService(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	saved, err := s.Store.AddService(r.PathValue("pid"), service)
+	saved, err := storeFrom(r).AddService(r.PathValue("pid"), service)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -143,7 +147,7 @@ func (s *Server) handleAddService(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteService(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteService(r.PathValue("pid"), r.PathValue("sid")); err != nil {
+	if err := storeFrom(r).DeleteService(r.PathValue("pid"), r.PathValue("sid")); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
@@ -155,7 +159,7 @@ func (s *Server) handleAddOperation(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	saved, err := s.Store.AddOperation(r.PathValue("pid"), r.PathValue("sid"), operation)
+	saved, err := storeFrom(r).AddOperation(r.PathValue("pid"), r.PathValue("sid"), operation)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -164,7 +168,7 @@ func (s *Server) handleAddOperation(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteOperation(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteOperation(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid")); err != nil {
+	if err := storeFrom(r).DeleteOperation(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid")); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
@@ -176,7 +180,7 @@ func (s *Server) handleAddCall(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	saved, err := s.Store.AddCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), call)
+	saved, err := storeFrom(r).AddCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), call)
 	if err != nil {
 		mapStoreErr(w, err)
 		return
@@ -190,7 +194,7 @@ func (s *Server) handleUpdateCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	call.ID = r.PathValue("cid")
-	if err := s.Store.UpdateCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), call); err != nil {
+	if err := storeFrom(r).UpdateCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), call); err != nil {
 		mapStoreErr(w, err)
 		return
 	}
@@ -198,7 +202,7 @@ func (s *Server) handleUpdateCall(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleDeleteCall(w http.ResponseWriter, r *http.Request) {
-	if err := s.Store.DeleteCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), r.PathValue("cid")); err != nil {
+	if err := storeFrom(r).DeleteCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), r.PathValue("cid")); err != nil {
 		mapStoreErr(w, err)
 		return
 	}

@@ -5,20 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"testing"
 
 	"soapweb/internal/model"
-	"soapweb/internal/store"
 )
 
 // newProxyTestServer builds a Server backed by a temp store holding one project.
 func newProxyTestServer(t *testing.T) (*Server, *http.ServeMux, model.Project) {
 	t.Helper()
-	st, err := store.New(filepath.Join(t.TempDir(), "projects.json"))
-	if err != nil {
-		t.Fatalf("store.New: %v", err)
-	}
+	srv, mux, st := newTestServer(t)
 	proj, err := st.AddProject(model.Project{
 		Name: "P",
 		Services: []model.Service{{
@@ -34,9 +29,6 @@ func newProxyTestServer(t *testing.T) (*Server, *http.ServeMux, model.Project) {
 	if err != nil {
 		t.Fatalf("AddProject: %v", err)
 	}
-	srv := &Server{Store: st}
-	mux := http.NewServeMux()
-	srv.Register(mux)
 	return srv, mux, proj
 }
 

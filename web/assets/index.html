@@ -29,6 +29,13 @@
           <span class="subtitle">SOAP / WSDL 接口调试</span>
         </span>
       </div>
+      <div class="topbar-workspace">
+        <span class="workspace-kicker">工作空间</span>
+        <button id="workspaceBtn" class="workspace-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="切换工作空间">
+          <span id="workspaceName" class="workspace-name">工作空间</span>
+          <span class="workspace-caret" aria-hidden="true">▾</span>
+        </button>
+      </div>
       <div class="topbar-actions">
         <div class="action-group" role="group" aria-label="工程操作">
           <button id="btnNewProject" class="btn ghost" title="新建空白工程">
@@ -276,6 +283,9 @@
 
   <!-- Popover menu for the project row's "⋯" trigger -->
   <div id="rowMenu" class="row-menu hidden" role="menu" aria-label="工程操作"></div>
+
+  <!-- Popover menu for the workspace switcher -->
+  <div id="workspaceMenu" class="row-menu workspace-menu hidden" role="menu" aria-label="工作空间"></div>
 
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 

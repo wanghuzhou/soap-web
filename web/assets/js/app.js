@@ -6,11 +6,12 @@ import { apiGet, apiHealth, apiJSON, apiUpload } from './api.js';
 import { toast } from './toast.js';
 import { initTheme } from './theme.js';
 import { initTree, renderTree, syncSelection } from './tree.js';
-import { initEditor, loadNode, updateEditButtons, isDirty } from './editor.js';
+import { initEditor, loadNode, updateEditButtons, isDirty, resetEditor, cancelSend } from './editor.js';
 import { initResponse } from './response.js';
 import { initProxy } from './proxy.js';
 import { initLayout } from './layout.js';
 import { initWsdlUrl } from './wsdlurl.js';
+import { initWorkspace, loadWorkspaceInfo, handleServerWorkspace } from './workspace.js';
 
 let pendingFileMode = null;
 
@@ -31,8 +32,11 @@ function setServerState(ok, text) {
 
 async function checkHealth() {
   if (document.hidden) return;
-  const ok = await apiHealth();
+  const health = await apiHealth();
+  const ok = !!health;
   setServerState(ok, ok ? '就绪' : '已断开');
+  // The heartbeat doubles as the workspace-change detector for other tabs.
+  if (ok) handleServerWorkspace(health.workspace);
 }
 
 function startHealthMonitor() {
@@ -58,6 +62,9 @@ async function loadProjects(selectFirst) {
       selectFirstInProject(state.projects[0]);
     }
   } catch (error) {
+    // A workspace mismatch is not an outage: workspace.js marks the tab stale
+    // and offers a sync, and its own toast explains the situation.
+    if (error.code === 'workspace_mismatch') return;
     setServerState(false, '连接失败');
     toast('加载工程失败: ' + error.message, true);
   }
@@ -84,6 +91,7 @@ async function reload() {
     state.projects = await apiGet('/api/projects');
     setServerState(true, '就绪');
   } catch (error) {
+    if (error.code === 'workspace_mismatch') return;
     setServerState(false, '连接失败');
     toast(error.message, true);
     return;
@@ -183,10 +191,25 @@ function pickFile(mode) {
   $('fileInput').click();
 }
 
+// workspaceName resolves an id to its display name for import notices.
+function workspaceName(id) {
+  const found = (state.workspaces || []).find((item) => item.id === id);
+  return found ? found.name : '其他工作空间';
+}
+
 async function importSoapUI(file) {
+  const startedIn = state.workspaceId;
   try {
-    const saved = await apiUpload('/api/import/soapui', file);
+    const result = await apiUpload('/api/import/soapui', file);
+    const saved = (result && result.project) || result;
     await loadProjects(false);
+    // A slow upload can finish after another tab switched workspaces. Compare
+    // with the workspace the import STARTED in: loadProjects() may already have
+    // synced state.workspaceId to the new one.
+    if (result && result.workspaceId && result.workspaceId !== startedIn) {
+      toast('已导入到工作空间「' + workspaceName(result.workspaceId) + '」，当前工作空间已切换', true);
+      return;
+    }
     toast('已导入并保存工程：' + (saved.name || file.name));
     const project = (state.projects || []).find((item) => item.id === saved.id);
     if (project) selectFirstInProject(project);
@@ -196,9 +219,14 @@ async function importSoapUI(file) {
 }
 
 async function parseWSDL(file) {
+  const startedIn = state.workspaceId;
   try {
     const result = await apiUpload('/api/wsdl/parse', file);
     await loadProjects(false);
+    if (result && result.workspaceId && result.workspaceId !== startedIn) {
+      toast('WSDL 已保存到工作空间「' + workspaceName(result.workspaceId) + '」，当前工作空间已切换', true);
+      return;
+    }
     toast('WSDL 解析完成并已保存工程');
     const project = result.project && (state.projects || []).find((item) => item.id === result.project.id);
     if (project) selectFirstInProject(project);
@@ -207,8 +235,7 @@ async function parseWSDL(file) {
   }
 }
 
-function boot() {
-  initCollapsed();
+async function boot() {
   initTheme();
   initResponse();
 
@@ -217,6 +244,16 @@ function boot() {
   initProxy({ reload });
   initLayout();
   initWsdlUrl({ reload, onImported: selectProject });
+  initWorkspace({
+    // Called after a switch/create/delete/external sync: the previous
+    // selection, response and collapse state belong to another workspace.
+    onEnter: async () => {
+      cancelSend();
+      resetEditor();
+      initCollapsed(state.workspaceId);
+      await loadProjects(false);
+    },
+  });
 
   $('btnNewProject').addEventListener('click', createProject);
   $('btnNewProjectSide').addEventListener('click', createProject);
@@ -231,8 +268,20 @@ function boot() {
   });
 
   updateEditButtons();
+
+  // The workspace must be known before the first project fetch: its id is sent
+  // as a header so the server can reject a stale tab, and the collapse map is
+  // keyed by it.
+  try {
+    await loadWorkspaceInfo();
+    initCollapsed(state.workspaceId);
+  } catch (error) {
+    setServerState(false, '连接失败');
+    toast('加载工作空间失败: ' + error.message, true);
+  }
+
   startHealthMonitor();
-  loadProjects(true);
+  await loadProjects(true);
 }
 
 if (document.readyState === 'loading') {

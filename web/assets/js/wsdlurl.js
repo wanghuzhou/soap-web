@@ -195,10 +195,18 @@ async function submitWsdlUrl() {
 
     // The server allows itself 30s for the download; the client waits a little
     // longer so a slow-but-successful import is not reported as a timeout.
+    const startedIn = state.workspaceId;
     const result = await apiJSON('POST', '/api/wsdl/fetch', payload, { timeoutMs: 45_000 });
     const project = result && result.project;
     closeWsdlUrlDialog();
     await reloadHandler();
+    // A slow fetch can land after another tab switched workspaces; the server
+    // tells us which workspace actually received the project.
+    if (result && result.workspaceId && result.workspaceId !== startedIn) {
+      const ws = (state.workspaces || []).find((item) => item.id === result.workspaceId);
+      toast('WSDL 已导入到工作空间「' + (ws ? ws.name : '其他工作空间') + '」，当前工作空间已切换', true);
+      return;
+    }
     toast('WSDL 已导入：' + ((project && project.name) || checked.url));
     if (project) onImported(project);
   } catch (error) {

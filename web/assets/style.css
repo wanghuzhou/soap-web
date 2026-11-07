@@ -123,7 +123,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   height: var(--topbar-h);
   padding: 0 16px;
@@ -155,7 +155,7 @@ button:disabled { cursor: not-allowed; opacity: .42; }
   overflow: hidden; text-overflow: ellipsis;
 }
 
-.topbar-actions { display: flex; align-items: center; gap: 10px; flex: none; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; flex: none; margin-left: auto; }
 .action-group { display: flex; align-items: center; gap: 6px; }
 .topbar-divider { width: 1px; height: 22px; background: var(--border); flex: none; }
 
@@ -238,6 +238,48 @@ button:disabled { cursor: not-allowed; opacity: .42; }
 }
 .status-badge.is-error { color: var(--red); border-color: var(--red-soft); }
 .status-badge.is-error .dot { background: var(--red); box-shadow: 0 0 0 3px var(--red-soft); }
+
+/* ---------- Workspace switcher (top bar) ---------- */
+/* Named separately from the three-pane .workspace grid below: one is the data
+   container (Postman-style), the other is the page layout. */
+.topbar-workspace { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.workspace-kicker {
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  letter-spacing: .2px;
+}
+.workspace-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 240px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+  color: var(--text);
+  font-size: 12.5px;
+  white-space: nowrap;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.workspace-btn:hover { background: var(--border-soft); border-color: var(--hover-border); }
+.workspace-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.workspace-caret { color: var(--text-dim); font-size: 10px; flex: none; }
+.workspace-btn.is-stale { border-color: var(--amber); color: var(--amber); }
+.workspace-btn.is-stale::before {
+  content: '';
+  width: 6px; height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--amber);
+}
+.workspace-menu { min-width: 220px; max-width: 320px; }
+.workspace-menu .ws-item { display: flex; align-items: center; gap: 8px; }
+.workspace-menu .ws-check { width: 12px; flex: none; color: var(--accent); font-size: 11px; }
+.workspace-menu .ws-name { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.workspace-menu .ws-current { font-weight: 600; }
 
 /* ---------- Workspace ---------- */
 .workspace {
@@ -817,6 +859,8 @@ body.resizing { cursor: col-resize; user-select: none; }
   .subtitle { display: none; }
   .btn { padding: 0 10px; }
   .action-group { gap: 5px; }
+  .workspace-kicker { display: none; }
+  .workspace-btn { max-width: 160px; }
 }
 
 @media (max-width: 720px) {

@@ -110,6 +110,7 @@ globalThis.localStorage = {
   store: {},
   getItem(k) { return this.store[k] ?? null; },
   setItem(k, v) { this.store[k] = String(v); },
+  removeItem(k) { delete this.store[k]; },
 };
 globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 0);
 globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
@@ -118,7 +119,7 @@ globalThis.prompt = (msg, def) => def;
 
 // ---------- run the real modules ----------
 const base = new URL('../assets/js/', import.meta.url);
-const { state } = await import(new URL('state.js', base).href);
+const { state, initCollapsed, saveCollapsed } = await import(new URL('state.js', base).href);
 const { renderTree, syncSelection } = await import(new URL('tree.js', base).href);
 
 let failures = 0;
@@ -202,6 +203,37 @@ state.projects = fixture(0);
 renderTree();
 rows = getEl('tree').children;
 check('删除后行消失', !rows.some((r) => r.dataset.kind === 'call'));
+
+// ---- collapse state is namespaced per workspace ----
+// Regression: the map used to be global, so rendering workspace B pruned the
+// keys of workspace A and switching back lost the user's expanded/collapsed
+// layout. The legacy global key must be adopted by the first workspace only.
+localStorage.store['soap-web-collapsed:w1'] = JSON.stringify({ p1: true });
+initCollapsed('w1');
+check('按工作空间读取折叠状态', state.collapsed.p1 === true,
+  JSON.stringify(state.collapsed));
+
+localStorage.store['soap-web-collapsed:w2'] = JSON.stringify({ p2: true });
+initCollapsed('w2');
+check('切换工作空间不串用折叠状态', state.collapsed.p2 === true && !state.collapsed.p1,
+  JSON.stringify(state.collapsed));
+
+// A debounced save must be flushed before the map is replaced, otherwise the
+// last caret click in the old workspace is lost to the 300ms window.
+state.workspaceId = 'w1';
+state.collapsed = { a: true };
+saveCollapsed();
+initCollapsed('w2');
+const flushed = JSON.parse(localStorage.store['soap-web-collapsed:w1'] || '{}');
+check('切换前落盘待保存的折叠状态', flushed.a === true, JSON.stringify(flushed));
+
+// Legacy global key is migrated once and removed.
+delete localStorage.store['soap-web-collapsed:w3'];
+localStorage.store['soap-web-collapsed'] = JSON.stringify({ legacy: true });
+initCollapsed('w3');
+check('旧版全局折叠状态被迁移', state.collapsed.legacy === true
+  && localStorage.store['soap-web-collapsed'] === undefined,
+  JSON.stringify(state.collapsed));
 
 // ---- report ----
 if (failures === 0) {

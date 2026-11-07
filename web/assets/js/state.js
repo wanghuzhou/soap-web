@@ -9,26 +9,76 @@ export const state = {
   view: 'pretty',
   theme: 'dark',
   collapsed: {},
+  // Workspace the page is currently showing. workspaceId is sent with every
+  // API request so a switch in another tab cannot make this tab read or write
+  // the wrong data.
+  workspaceId: null,
+  workspaceName: '',
+  workspaces: [], // [{ id, name }]
+  workspaceStale: false, // server moved to another workspace, this tab has not synced
 };
 
 // saveCollapsed is debounced: toggling a caret used to trigger a synchronous
 // localStorage write of the whole map on every click, which blocks the main
 // thread on disk I/O. Writing once after the user stops clicking is enough.
-let saveTimer = 0;
+//
+// The workspace id and the serialized map are captured at schedule time: a
+// switch resets state.collapsed, and a timer firing afterwards must not write
+// the new workspace's map under the old workspace's key.
+let pendingSave = null; // { key, snapshot, timer }
 
-export function saveCollapsed() {
-  if (saveTimer) clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => {
-    saveTimer = 0;
-    try {
-      localStorage.setItem(STORAGE_KEY.COLLAPSED, JSON.stringify(state.collapsed));
-    } catch (e) { /* storage may be unavailable */ }
-  }, 300);
+function collapsedKey(workspaceID) {
+  return STORAGE_KEY.COLLAPSED + ':' + workspaceID;
 }
 
-export function initCollapsed() {
+// flushCollapsed writes a pending debounced save immediately. Called before
+// the collapse map is replaced (workspace switch) so the last caret click in
+// the old workspace is never lost to the debounce window.
+function flushCollapsed() {
+  if (!pendingSave) return;
+  const { key, snapshot, timer } = pendingSave;
+  pendingSave = null;
+  clearTimeout(timer);
   try {
-    const saved = localStorage.getItem(STORAGE_KEY.COLLAPSED);
+    localStorage.setItem(key, snapshot);
+  } catch (e) { /* storage may be unavailable */ }
+}
+
+export function saveCollapsed() {
+  if (!state.workspaceId) return;
+  flushCollapsed();
+  const key = collapsedKey(state.workspaceId);
+  const snapshot = JSON.stringify(state.collapsed);
+  const timer = setTimeout(() => {
+    try {
+      localStorage.setItem(key, snapshot);
+    } catch (e) { /* storage may be unavailable */ }
+    if (pendingSave && pendingSave.timer === timer) pendingSave = null;
+  }, 300);
+  pendingSave = { key, snapshot, timer };
+}
+
+// initCollapsed loads the collapse map for a workspace.
+//
+// Collapse keys are node ids (project/service/operation), so they must be kept
+// per workspace: the tree of workspace B would otherwise prune the keys of
+// workspace A on the first render and the user's layout would be lost on every
+// switch. The old global key is adopted once by the first workspace.
+export function initCollapsed(workspaceID) {
+  flushCollapsed();
+  state.collapsed = {};
+  if (!workspaceID) return;
+  try {
+    const key = collapsedKey(workspaceID);
+    let saved = localStorage.getItem(key);
+    if (!saved) {
+      const legacy = localStorage.getItem(STORAGE_KEY.COLLAPSED);
+      if (legacy) {
+        saved = legacy;
+        localStorage.setItem(key, legacy);
+        localStorage.removeItem(STORAGE_KEY.COLLAPSED);
+      }
+    }
     if (saved) state.collapsed = JSON.parse(saved) || {};
   } catch (e) {
     state.collapsed = {};

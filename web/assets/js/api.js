@@ -5,10 +5,30 @@
 //     forever;
 //   - cache: 'no-store', because this is a live local tool: /api/projects is
 //     re-read after every write, and a cached response would hide the change;
+//   - the X-Workspace-Id header, so the server can refuse a request from a tab
+//     that still points at a workspace another tab has switched away from;
 //   - optional caller-supplied abort signal, used by the editor to cancel a
 //     send or discard a superseded one.
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+const WORKSPACE_HEADER = 'X-Workspace-Id';
+
+// workspaceID is the workspace this page loaded. Kept in this module (instead
+// of importing state) so every request path shares one source of truth without
+// a module cycle.
+let workspaceID = null;
+let mismatchHandler = null;
+
+export function setWorkspaceID(id) {
+  workspaceID = id || null;
+}
+
+// setWorkspaceMismatchHandler registers the callback invoked when the server
+// answers 409 workspace_mismatch. The workspace module uses it to mark the tab
+// as stale (or resync automatically).
+export function setWorkspaceMismatchHandler(fn) {
+  mismatchHandler = fn;
+}
 
 // request performs a fetch and returns the raw Response.
 // The caller-supplied signal (if any) is chained to the internal timeout.
@@ -23,8 +43,11 @@ async function request(url, init = {}, timeoutMs = DEFAULT_TIMEOUT_MS) {
     else external.addEventListener('abort', () => controller.abort(), { once: true });
   }
 
+  const headers = new Headers(init.headers || {});
+  if (workspaceID) headers.set(WORKSPACE_HEADER, workspaceID);
+
   try {
-    return await fetch(url, { ...init, signal: controller.signal, cache: 'no-store' });
+    return await fetch(url, { ...init, headers, signal: controller.signal, cache: 'no-store' });
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -38,7 +61,15 @@ async function readJSON(response) {
   }
   if (!response.ok) {
     const message = (data && (data.error || data.message)) || ('请求失败 (' + response.status + ')');
-    throw new Error(message);
+    // The workspace changed under this tab. Notify the workspace module before
+    // throwing so the UI can offer to resync instead of silently retrying.
+    if (response.status === 409 && data && data.code === 'workspace_mismatch' && mismatchHandler) {
+      try { mismatchHandler(data.workspace); } catch (e) { /* never mask the API error */ }
+    }
+    const error = new Error(message);
+    error.status = response.status;
+    error.code = (data && data.code) || '';
+    throw error;
   }
   return data;
 }
@@ -75,8 +106,9 @@ export async function apiSend(payload, options = {}) {
   return apiJSON('POST', '/api/send', payload, { signal: options.signal, timeoutMs });
 }
 
-// apiHealth probes /api/health and reports whether the local backend answers.
-// It never throws: the badge should switch to an offline state, not show an error.
+// apiHealth probes /api/health and returns the payload (which includes the
+// server's current workspace), or null when the backend is unreachable. It
+// never throws: the badge should switch to an offline state, not show an error.
 export async function apiHealth(timeoutMs = 3000) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -85,11 +117,12 @@ export async function apiHealth(timeoutMs = 3000) {
       signal: controller.signal,
       cache: 'no-store',
     });
-    if (!response.ok) return false;
+    if (!response.ok) return null;
     const data = await response.json().catch(() => null);
-    return !!data && data.status === 'ok';
+    if (!data || data.status !== 'ok') return null;
+    return data;
   } catch (error) {
-    return false;
+    return null;
   } finally {
     clearTimeout(timer);
   }
