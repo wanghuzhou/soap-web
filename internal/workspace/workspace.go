@@ -1,18 +1,10 @@
-// Package workspace manages the set of project files ("workspaces") and which
-// one is currently active.
+// Package workspace manages the project files ("workspaces") and which one is
+// active. A workspace is a projects.json-format file; settings.json maps
+// display names to files and records the active id.
 //
-// A workspace is nothing more than a projects.json-format file: a JSON array of
-// model.Project. settings.json records the display names and the mapping to
-// those files, plus the id of the active one, so the next start resumes where
-// the user left off.
-//
-// File paths are an implementation detail: the API only exposes ids and names.
-// That is why renaming a workspace is a metadata-only operation and never
-// touches the filesystem.
-//
-// Concurrency: the registry is safe for concurrent use. A switch loads and
-// validates the target file BEFORE writing settings.json, so a corrupt target
-// leaves both the in-memory state and the settings file untouched.
+// Paths never leave this package: the API exposes ids and names only. A switch
+// loads the target before writing settings.json, so a corrupt file leaves the
+// current state untouched.
 package workspace
 
 import (
@@ -28,6 +20,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"soapweb/internal/fileutil"
 	"soapweb/internal/store"
 )
 
@@ -74,6 +67,14 @@ type settings struct {
 	Workspaces []entry `json:"workspaces"`
 }
 
+// clone returns a settings value whose Workspaces slice can be mutated without
+// affecting the registry's copy.
+func (s settings) clone() settings {
+	out := s
+	out.Workspaces = append([]entry(nil), s.Workspaces...)
+	return out
+}
+
 // Registry owns settings.json and the currently active store.
 type Registry struct {
 	mu       sync.RWMutex
@@ -84,15 +85,11 @@ type Registry struct {
 	activeID string
 }
 
-// Open loads (or initialises) the registry rooted at dir.
+// Open loads the registry at dir, creating the directory, settings.json and a
+// default workspace when they are missing or settings.json is empty.
 //
-// legacyFile is the old -data projects.json path when the user still passes a
-// file instead of a directory; it becomes the file of the initial "默认"
-// workspace so existing data keeps working without a migration step.
-//
-// A missing data directory, a missing settings.json and an empty settings.json
-// are all treated as a fresh install: the directory and a default configuration
-// are created before returning, so the caller never has to special-case them.
+// legacyFile is the old -data projects.json path; it becomes the initial
+// "默认" workspace so existing data keeps working without a migration.
 func Open(dir, legacyFile string) (*Registry, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -130,7 +127,7 @@ func Open(dir, legacyFile string) (*Registry, error) {
 	data, err := os.ReadFile(r.path)
 	switch {
 	case err == nil:
-		data = stripBOM(data)
+		data = fileutil.StripBOM(data)
 		trimmed := bytes.TrimSpace(data)
 		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 			// An empty settings.json (a crashed write, or a file created by
@@ -159,13 +156,6 @@ func Open(dir, legacyFile string) (*Registry, error) {
 		return nil, err
 	}
 	return r, nil
-}
-
-// stripBOM removes a UTF-8 byte-order mark. Windows editors (notably older
-// Notepad) add one by default, and encoding/json rejects it as an invalid
-// character at the start of the document.
-func stripBOM(data []byte) []byte {
-	return bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
 }
 
 // DataDir returns the directory that holds settings.json and the workspace
@@ -410,9 +400,7 @@ func (r *Registry) Create(rawName string) (Info, error) {
 		return Info{}, err
 	}
 
-	next := r.settings
-	next.Workspaces = make([]entry, 0, len(r.settings.Workspaces)+1)
-	next.Workspaces = append(next.Workspaces, r.settings.Workspaces...)
+	next := r.settings.clone()
 	next.Workspaces = append(next.Workspaces, entry{ID: id, Name: name, File: rel})
 	next.Current = id
 	if err := r.saveSettings(next); err != nil {
@@ -443,9 +431,7 @@ func (r *Registry) Rename(id, rawName string) (Info, error) {
 		return Info{}, ErrDuplicateName
 	}
 
-	next := r.settings
-	next.Workspaces = make([]entry, len(r.settings.Workspaces))
-	copy(next.Workspaces, r.settings.Workspaces)
+	next := r.settings.clone()
 	next.Workspaces[i].Name = name
 	if err := r.saveSettings(next); err != nil {
 		return Info{}, err
@@ -473,10 +459,8 @@ func (r *Registry) Delete(id string) error {
 	}
 	w := r.settings.Workspaces[i]
 
-	next := r.settings
-	next.Workspaces = make([]entry, 0, len(r.settings.Workspaces)-1)
-	next.Workspaces = append(next.Workspaces, r.settings.Workspaces[:i]...)
-	next.Workspaces = append(next.Workspaces, r.settings.Workspaces[i+1:]...)
+	next := r.settings.clone()
+	next.Workspaces = append(next.Workspaces[:i], next.Workspaces[i+1:]...)
 
 	var (
 		nextStore *store.Store
@@ -575,22 +559,12 @@ func (r *Registry) moveToTrash(p string) (string, bool, error) {
 	return target, true, nil
 }
 
-// saveSettings writes settings.json atomically (temp file + rename), so a crash
-// mid-write cannot leave a truncated mapping behind.
+// saveSettings writes settings.json atomically.
 func (r *Registry) saveSettings(s settings) error {
 	if s.Version == 0 {
 		s.Version = settingsVersion
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	tmp := r.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, r.path)
+	return fileutil.WriteJSONAtomic(r.path, s, 0o644)
 }
 
 // absPath resolves a workspace's stored relative file to an absolute path and

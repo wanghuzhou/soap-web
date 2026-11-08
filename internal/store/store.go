@@ -1,22 +1,9 @@
-// Package store persists projects to a local JSON file and provides CRUD
-// operations over the project -> service -> operation -> call hierarchy.
+// Package store persists projects to a local JSON file and provides CRUD over
+// the project -> service -> operation -> call hierarchy.
 //
-// It is safe for concurrent use. All writes are serialised and persisted
-// atomically (write to temp file, then rename) so a crash cannot leave a
-// half-written data file.
-//
-// Two invariants make that claim hold:
-//
-//   - Values handed out (List, Get) are deep copies, so a caller serialising a
-//     project cannot observe a concurrent mutation through a shared backing
-//     array. A shallow copy would still share the inner Services/Operations/
-//     Calls slices with the store, which is a genuine data race once the API
-//     serves two requests at the same time.
-//
-//   - Mutations are applied to a copy, persisted, and only then swapped into
-//     memory. If persisting fails, memory is left untouched; otherwise the API
-//     would report an error while the object stayed alive in the server and
-//     vanished on the next restart.
+// It is safe for concurrent use: callers receive deep copies, and every
+// mutation is applied to a copy, persisted, and only then swapped into memory.
+// Writes are atomic (temp file + rename), so a crash cannot truncate the file.
 package store
 
 import (
@@ -30,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"soapweb/internal/fileutil"
 	"soapweb/internal/model"
 )
 
@@ -56,10 +44,9 @@ func New(path string) (*Store, error) {
 		}
 		return nil, err
 	}
-	// Strip a UTF-8 BOM before decoding: Windows editors (notably older
-	// Notepad) add one by default, and encoding/json rejects it as an invalid
-	// character at the start of the document.
-	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	// Ignore a UTF-8 BOM: Windows editors add one by default and
+	// encoding/json rejects it.
+	data = fileutil.StripBOM(data)
 	if len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, &s.projects); err != nil {
 			return nil, err
@@ -124,27 +111,13 @@ func NewID() string {
 	return hex.EncodeToString(b)
 }
 
-// saveProjects persists the given project list atomically. Caller must hold the
-// lock. Writing to a temp file and renaming means a crash mid-write cannot
-// truncate the real data file.
+// saveProjects persists the project list atomically. Caller must hold the lock.
 func (s *Store) saveProjects(projects []model.Project) error {
-	data, err := json.MarshalIndent(projects, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return fileutil.WriteJSONAtomic(s.path, projects, 0o644)
 }
 
-// commit applies mutate to a deep copy of the project list, persists the result,
-// and only then installs it as the in-memory state.
-//
-// This keeps memory and disk in lockstep: if the write fails the caller sees an
-// error and the store still holds exactly what is on disk. Caller must hold the
-// write lock.
+// commit applies mutate to a deep copy, persists it, and only then swaps it
+// into memory, so a failed write leaves memory unchanged. Caller holds the lock.
 func (s *Store) commit(mutate func([]model.Project) ([]model.Project, error)) error {
 	next := cloneProjects(s.projects)
 	next, err := mutate(next)
@@ -239,12 +212,8 @@ func indexOfProject(list []model.Project, id string) int {
 	return -1
 }
 
-// List returns a deep copy of all projects.
-//
-// An empty store returns an empty slice, not nil: with workspaces, "this
-// workspace has no projects yet" is a normal state, and the API should answer
-// [] rather than null so clients can treat the response as a list
-// unconditionally.
+// List returns a deep copy of all projects. An empty store returns [] rather
+// than null, since "no projects yet" is a normal state.
 func (s *Store) List() []model.Project {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -305,12 +274,8 @@ func (s *Store) UpdateProject(p model.Project) error {
 	})
 }
 
-// UpdateProjectProxy updates only the proxy settings of a project.
-//
-// Sending a whole project back to the server just to change a proxy toggle is
-// unsafe: the client's copy is a snapshot, so a concurrent edit in another tab
-// (or a WSDL import that landed in between) would be overwritten wholesale.
-// This narrow write touches exactly one field.
+// UpdateProjectProxy updates only the proxy settings. A narrow write avoids
+// overwriting concurrent edits from another tab with a stale snapshot.
 func (s *Store) UpdateProjectProxy(id string, proxy *model.ProxySettings) error {
 	if err := proxy.Validate(); err != nil {
 		return err

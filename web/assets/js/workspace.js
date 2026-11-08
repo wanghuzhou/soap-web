@@ -1,17 +1,12 @@
-// Workspace switcher: the top-bar control plus the create/rename/delete
-// actions. The backend only exposes names and ids; file paths never reach the
-// browser.
-//
-// Multi-tab safety lives here too: when the server reports that another tab
-// switched workspaces (409 from any API call, or the 10-second health poll),
-// this module marks the tab stale. It resyncs automatically only when nothing
-// is unsaved and no request is in flight; otherwise the user has to confirm,
-// because a switch discards the current editor contents.
+// Workspace switcher: top-bar control plus create/rename/delete. It also marks
+// the tab stale when another tab switches workspaces, so unsaved edits are
+// never silently discarded.
 
 import { $, escapeHtml, escapeAttr } from './dom.js';
 import { state } from './state.js';
 import { apiGet, apiJSON, setWorkspaceID, setWorkspaceMismatchHandler } from './api.js';
 import { isDirty, isSending } from './editor.js';
+import { placeMenu } from './popover.js';
 import { toast } from './toast.js';
 
 let onEnter = async () => {};
@@ -236,29 +231,6 @@ function renderMenu() {
     + `<button type="button" class="row-menu-item danger" role="menuitem" data-act="delete"${list.length <= 1 ? ' disabled' : ''}>删除当前…</button>`;
 }
 
-function place(menu, anchor) {
-  // Measure at the origin so the size is trustworthy before positioning.
-  menu.style.left = '0px';
-  menu.style.top = '0px';
-  const rect = anchor.getBoundingClientRect();
-  const size = menu.getBoundingClientRect();
-  const margin = 8;
-
-  let left = rect.left;
-  if (left + size.width > window.innerWidth - margin) left = window.innerWidth - margin - size.width;
-  if (left < margin) left = margin;
-
-  let top = rect.bottom + 4;
-  if (top + size.height > window.innerHeight - margin) {
-    const above = rect.top - size.height - 4;
-    top = above >= margin ? above : window.innerHeight - margin - size.height;
-  }
-  if (top < margin) top = margin;
-
-  menu.style.left = Math.round(left) + 'px';
-  menu.style.top = Math.round(top) + 'px';
-}
-
 function openMenu() {
   const menu = $('workspaceMenu');
   const button = $('workspaceBtn');
@@ -266,7 +238,7 @@ function openMenu() {
   renderMenu();
   menu.classList.remove('hidden');
   button.setAttribute('aria-expanded', 'true');
-  place(menu, button);
+  placeMenu(menu, button, 'left');
   menuOpen = true;
 
   const onPointerDown = (event) => {

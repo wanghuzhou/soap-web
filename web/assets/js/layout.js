@@ -85,17 +85,9 @@ export function initLayout() {
     };
   }
 
-  // startDrag wires a resizer to pointer events.
-  //
-  // Previously only mousedown/mousemove/mouseup were handled. That broke in
-  // three ways: touch screens could not drag at all; releasing the button
-  // outside the window delivered no mouseup, so .dragging and body.resizing
-  // stayed set forever (cursor stuck at col-resize, text unselectable); and
-  // every move read getBoundingClientRect and wrote two custom properties
-  // without coalescing, forcing synchronous layout on each pointer event.
-  //
-  // Now: pointer capture guarantees the pointerup arrives, moves are coalesced
-  // into one write per animation frame, and pointercancel cleans up.
+  // startDrag wires a resizer to pointer events. Pointer capture guarantees the
+  // pointerup arrives, moves are coalesced into one write per frame, and
+  // pointercancel cleans up.
   function startDrag(handle, onDelta) {
     handle.addEventListener('pointerdown', (event) => {
       if (event.button !== 0 || !isWide()) return;

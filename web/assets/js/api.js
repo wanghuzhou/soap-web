@@ -1,14 +1,6 @@
-// JSON API client. All server errors are normalised into Error(message).
-//
-// Every call goes through request(), which adds:
-//   - a timeout (AbortController), so a wedged backend cannot hang the UI
-//     forever;
-//   - cache: 'no-store', because this is a live local tool: /api/projects is
-//     re-read after every write, and a cached response would hide the change;
-//   - the X-Workspace-Id header, so the server can refuse a request from a tab
-//     that still points at a workspace another tab has switched away from;
-//   - optional caller-supplied abort signal, used by the editor to cancel a
-//     send or discard a superseded one.
+// JSON API client. request() adds a timeout, cache: 'no-store', the
+// X-Workspace-Id header, and chains the caller's abort signal. Server errors
+// are normalised into Error(message).
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 const WORKSPACE_HEADER = 'X-Workspace-Id';

@@ -1,15 +1,7 @@
-// Frontend regression checks for web/assets/js/*.js.
-//
-// The project has no build step and no JS test runner, so this script runs the
-// real ES modules directly under Node and asserts the invariants that the
-// editor's XML pipeline depends on. Run with:
-//
+// XML pipeline invariants (format/minify/highlight). Runs the real ES modules
+// under Node and exits non-zero on failure. Lives outside web/assets so it is
+// not embedded into the binary.
 //     node web/selftest/xml.selftest.mjs
-//
-// It lives outside web/assets/ on purpose: everything under web/assets is
-// embedded into the binary and served to the browser via embed.FS.
-//
-// It exits non-zero on failure so it can gate CI alongside `go test ./...`.
 
 import { prettyXML, minifyXML, normalizeNewlines, highlightXML, formatSize } from '../assets/js/xml.js';
 

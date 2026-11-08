@@ -1,16 +1,6 @@
-// Tree behaviour regression checks.
-//
-// Runs the real tree.js / state.js under a minimal DOM stub so the rendering
-// contract can be asserted without a browser. Run with:
-//
+// Tree rendering contract: structural changes call renderTree(), selection
+// changes call syncSelection(). Runs the real tree.js/state.js under a DOM stub.
 //     node web/selftest/tree.selftest.mjs
-//
-// Regression it guards: loadNode() was changed to update only the selection
-// marker (syncSelection) instead of rebuilding the tree. That is correct for
-// pure selection changes, but reload() used to rely on loadNode() to redraw —
-// so a newly created request sample never appeared until the page was
-// refreshed. The contract is: structural changes must call renderTree();
-// selection changes must call syncSelection().
 
 // ---------- minimal DOM stub ----------
 class El {

@@ -355,12 +355,8 @@ function selectRow(row) {
   }
 }
 
-// syncSelection moves the .selected marker without rebuilding the tree.
-//
-// renderTree() used to be called at the end of every loadNode(), which re-parsed
-// the whole tree (roughly 80 KB of HTML for 200 nodes) just to move one class.
-// It also destroyed the button the user had just clicked, dropping focus to
-// <body> and breaking :focus-within, so the row's inline actions vanished.
+// syncSelection moves the .selected marker without rebuilding the tree, which
+// would re-parse the whole tree and drop focus from the clicked row.
 export function syncSelection() {
   const tree = $('tree');
   if (!tree) return;

@@ -18,13 +18,9 @@ export const state = {
   workspaceStale: false, // server moved to another workspace, this tab has not synced
 };
 
-// saveCollapsed is debounced: toggling a caret used to trigger a synchronous
-// localStorage write of the whole map on every click, which blocks the main
-// thread on disk I/O. Writing once after the user stops clicking is enough.
-//
-// The workspace id and the serialized map are captured at schedule time: a
-// switch resets state.collapsed, and a timer firing afterwards must not write
-// the new workspace's map under the old workspace's key.
+// saveCollapsed is debounced: writing the whole map on every caret click would
+// block the main thread. The workspace id and snapshot are captured when the
+// save is scheduled, so a switch cannot write the new map under the old key.
 let pendingSave = null; // { key, snapshot, timer }
 
 function collapsedKey(workspaceID) {
@@ -58,12 +54,8 @@ export function saveCollapsed() {
   pendingSave = { key, snapshot, timer };
 }
 
-// initCollapsed loads the collapse map for a workspace.
-//
-// Collapse keys are node ids (project/service/operation), so they must be kept
-// per workspace: the tree of workspace B would otherwise prune the keys of
-// workspace A on the first render and the user's layout would be lost on every
-// switch. The old global key is adopted once by the first workspace.
+// initCollapsed loads the collapse map for a workspace. Keys are node ids, so
+// they must be per workspace; the old global key is adopted once.
 export function initCollapsed(workspaceID) {
   flushCollapsed();
   state.collapsed = {};
@@ -93,12 +85,8 @@ export function toggleCollapsed(key) {
   saveCollapsed();
 }
 
-// pruneCollapsed drops keys that no longer correspond to a node.
-//
-// Project/service/operation ids are random hex generated on import, so
-// re-importing the same SoapUI project produces all-new ids and the old keys
-// would linger as orphans forever. Called after each render with the set of ids
-// that still exist.
+// pruneCollapsed drops keys that no longer correspond to a node (ids are
+// regenerated on import, so orphans would otherwise accumulate).
 export function pruneCollapsed(validKeys) {
   let changed = false;
   Object.keys(state.collapsed).forEach((key) => {
@@ -112,6 +100,19 @@ export function pruneCollapsed(validKeys) {
 
 export function findProject(projectID) {
   return (state.projects || []).find((project) => project.id === projectID) || null;
+}
+
+// findWorkspaceName resolves a workspace id to its display name, or ''.
+export function findWorkspaceName(workspaceID) {
+  const found = (state.workspaces || []).find((item) => item.id === workspaceID);
+  return found ? found.name : '';
+}
+
+// workspaceLandedIn returns the display name when an import result landed in a
+// workspace other than the one it started in, or '' when it is still visible.
+export function workspaceLandedIn(result, startedIn) {
+  if (!result || !result.workspaceId || result.workspaceId === startedIn) return '';
+  return findWorkspaceName(result.workspaceId) || '其他工作空间';
 }
 
 export function findService(projectID, serviceID) {

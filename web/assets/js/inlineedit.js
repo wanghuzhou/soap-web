@@ -1,16 +1,7 @@
-// In-place rename for tree rows. Replaces the row's label with a text input and
-// reports the result through callbacks; it deliberately knows nothing about
-// projects, APIs or rendering so tree.js stays the only owner of that logic.
-//
-// Design notes:
-// - Only the label node is swapped, never the whole tree. Rebuilding the tree
-//   on blur would remove the element the user is currently clicking and swallow
-//   that click.
-// - The original label element is put back on finish, so a failed save leaves
-//   the row showing exactly what it showed before.
-// - Keydown is stopped from bubbling so global shortcuts (Ctrl+Enter = send)
-//   cannot fire while typing a name.
-// - IME: Enter during composition must confirm the candidate, not submit.
+// In-place rename for tree rows. Only the label node is swapped (rebuilding the
+// tree would swallow the click), the original label is restored on failure, and
+// keydown is stopped so global shortcuts cannot fire while typing. IME Enter
+// confirms the candidate instead of submitting.
 
 let active = null;
 

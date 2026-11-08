@@ -1,7 +1,7 @@
 // Application entry point: wires the feature modules together.
 
 import { $ } from './dom.js';
-import { state, initCollapsed, findService, findOperation, findCall } from './state.js';
+import { state, initCollapsed, findService, findOperation, findCall, workspaceLandedIn } from './state.js';
 import { apiGet, apiHealth, apiJSON, apiUpload } from './api.js';
 import { toast } from './toast.js';
 import { initTheme } from './theme.js';
@@ -70,21 +70,9 @@ async function loadProjects(selectFirst) {
   }
 }
 
-// reload re-fetches projects and re-syncs the UI.
-//
-// It serves two distinct situations:
-//
-//   - structural change (a node was added, deleted or renamed): the tree must be
-//     rebuilt, otherwise a newly created request never appears until the page is
-//     refreshed;
-//   - pure refresh (proxy saved, selection moved): the tree only needs its
-//     selection marker updated.
-//
-// The tree rebuild is therefore unconditional here, while loadNode() stays
-// selection-only. Splitting them the other way round (rebuild inside loadNode)
-// would reintroduce the full-tree re-parse on every click, and skipping the
-// rebuild entirely breaks node creation — both mistakes are easy to make, so
-// the responsibility is stated explicitly at each call site.
+// reload re-fetches projects and re-syncs the UI. Structural changes must
+// rebuild the tree (a new request would otherwise not appear); pure selection
+// changes only move the marker, so loadNode() stays selection-only.
 async function reload() {
   const selected = state.selected;
   try {
@@ -191,23 +179,16 @@ function pickFile(mode) {
   $('fileInput').click();
 }
 
-// workspaceName resolves an id to its display name for import notices.
-function workspaceName(id) {
-  const found = (state.workspaces || []).find((item) => item.id === id);
-  return found ? found.name : '其他工作空间';
-}
-
 async function importSoapUI(file) {
   const startedIn = state.workspaceId;
   try {
     const result = await apiUpload('/api/import/soapui', file);
     const saved = (result && result.project) || result;
     await loadProjects(false);
-    // A slow upload can finish after another tab switched workspaces. Compare
-    // with the workspace the import STARTED in: loadProjects() may already have
-    // synced state.workspaceId to the new one.
-    if (result && result.workspaceId && result.workspaceId !== startedIn) {
-      toast('已导入到工作空间「' + workspaceName(result.workspaceId) + '」，当前工作空间已切换', true);
+    // A slow upload can finish after another tab switched workspaces.
+    const other = workspaceLandedIn(result, startedIn);
+    if (other) {
+      toast('已导入到工作空间「' + other + '」，当前工作空间已切换', true);
       return;
     }
     toast('已导入并保存工程：' + (saved.name || file.name));
@@ -223,8 +204,9 @@ async function parseWSDL(file) {
   try {
     const result = await apiUpload('/api/wsdl/parse', file);
     await loadProjects(false);
-    if (result && result.workspaceId && result.workspaceId !== startedIn) {
-      toast('WSDL 已保存到工作空间「' + workspaceName(result.workspaceId) + '」，当前工作空间已切换', true);
+    const other = workspaceLandedIn(result, startedIn);
+    if (other) {
+      toast('WSDL 已保存到工作空间「' + other + '」，当前工作空间已切换', true);
       return;
     }
     toast('WSDL 解析完成并已保存工程');

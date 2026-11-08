@@ -1,22 +1,9 @@
 // XML helpers: newline normalisation, pretty printing, minifying and the
 // lightweight syntax highlighter used by the request/response panes.
 
-// escapeHtml escapes the five XML special characters.
-//
-// Quotes are escaped too. This function is used both for text content and,
-// via escapeAttr in dom.js, for attribute values; escaping quotes makes it
-// safe in both contexts, so the two can never be mixed up.
-export function escapeHtml(value) {
-  return String(value == null ? '' : value).replace(/[&<>"']/g, (ch) => {
-    switch (ch) {
-      case '&': return '&amp;';
-      case '<': return '&lt;';
-      case '>': return '&gt;';
-      case '"': return '&quot;';
-      default: return '&#39;';
-    }
-  });
-}
+import { escapeAttr as escapeHtml } from './dom.js';
+
+export { escapeHtml };
 
 // TOKEN_RE splits XML into CDATA, comments, PIs, tags and text.
 //
@@ -32,23 +19,10 @@ const TOKEN_RE = /<!\[CDATA\[[\s\S]*?\]\]>|<!--[\s\S]*?-->|<\?[\s\S]*?\?>|<\/?[^
 // documents rarely exceed ~20 levels; beyond this we simply stop indenting.
 const MAX_INDENT_DEPTH = 64;
 
-// Pretty-print XML with indentation.
-//
-// Whitespace is significant in XML text content: a value such as "  abc  ", a
-// preserved blank line, or the leading newline of a multi-line base64 payload
-// must survive verbatim. Re-indenting an element that carries text would
-// silently rewrite the payload, and the editor persists what it shows, so the
-// damage would be permanent.
-//
-// Therefore this only reflows where reflowing is provably safe:
-//   * element-only content (children, no significant text) -> re-indented;
-//   * an element whose content contains significant text (text-only or mixed)
-//     -> emitted verbatim, byte for byte;
-//   * CDATA / comments / processing instructions keep their inner content.
-// Pure inter-element indentation (whitespace containing a newline) is dropped,
-// because it carries no meaning in an element-only content model.
-//
-// Returns input unchanged if it does not look like XML.
+// prettyXML re-indents XML without rewriting significant text. Element-only
+// content is reflowed; text, mixed content, CDATA, comments and PIs stay
+// verbatim; inter-element whitespace containing a newline is dropped. Returns
+// the input unchanged when it does not look like XML.
 export function prettyXML(xml) {
   const text = xml == null ? '' : xml;
   if (!text.trim() || text.trim()[0] !== '<') return text;
@@ -138,16 +112,8 @@ function isIndentOnly(raw) {
   return /^[ \t\r\n]*$/.test(raw) && raw.indexOf('\n') >= 0;
 }
 
-// contentHasText reports whether the *direct* content of an element is
-// significant, i.e. whether re-indenting it would alter the payload.
-//
-// Descendant text does not count: <a><b>1</b></a> is element-only content and
-// can be reflowed freely. Only text that sits directly inside the element
-// matters, so the scan tracks nesting depth.
-//
-// CDATA is treated as significant too: it normally carries real data (base64,
-// embedded XML, SQL) and injecting indentation around it changes the content
-// model of the element.
+// contentHasText reports whether an element's direct content is significant.
+// Descendant text does not count; CDATA does (it carries real data).
 function contentHasText(tokens, from, to) {
   let depth = 0;
   for (let i = from; i < to; i++) {
@@ -164,14 +130,8 @@ function contentHasText(tokens, from, to) {
   return false;
 }
 
-// NEWLINE_RUN_RE matches a whitespace run that contains a newline. Inside text
-// such a run is always formatting: XML attribute value normalisation already
-// turns a newline in an attribute into a space, so no payload depends on one.
-// Collapsing it to a single space is exactly what parsing would have produced.
-//
-// Horizontal runs ([ \t]+ with no newline) are deliberately left alone: they
-// may be real content, e.g. a column-aligned signature or an indented first
-// line of a text payload.
+// NEWLINE_RUN_RE matches whitespace containing a newline: always formatting,
+// since parsing normalises it to a space. Horizontal runs may be real content.
 const NEWLINE_RUN_RE = /[ \t\r\n]*\n[ \t\r\n]*/g;
 
 // CDATA_OPEN / CDATA_CLOSE delimit a CDATA section. Kept as constants so the
@@ -179,29 +139,10 @@ const NEWLINE_RUN_RE = /[ \t\r\n]*\n[ \t\r\n]*/g;
 const CDATA_OPEN = '<![CDATA[';
 const CDATA_CLOSE = ']]>';
 
-// Minify XML: emit the token stream on a single line.
-//
-// Minifying means removing formatting whitespace. The only whitespace that is
-// certainly formatting is what contains a newline, and that criterion is
-// context independent, which is what makes minifying safe on content whose
-// meaning we cannot judge (mixed content, xml:space="preserve", base64 blobs).
-//
-// Each region is therefore handled as its own case:
-//   * between tags -> dropped entirely;
-//   * text (CDATA / plain) -> a newline-carrying run collapses to one space;
-//   * comments / processing instructions / tags -> kept verbatim.
-//
-// The previous implementation hid comments and CDATA behind \u0000N\u0000
-// placeholders and then ran />\s+</ over the rest. That failed twice:
-//   * the placeholder sits between ">" and "<", so />\s+</ no longer matched
-//     and the whitespace around every comment/CDATA survived — the result was
-//     not minified at all;
-//   * a whole CDATA section was kept as one opaque token, so a SOAP call whose
-//     payload lives inside <![CDATA[...]]> (the normal shape of a SoapUI
-//     sample, e.g. "5.6.3 获取医院信息") kept all of its line breaks.
-//
-// Tokenising once, which is what prettyXML and highlightXML already do, handles
-// every case without placeholders and in linear time.
+// minifyXML removes formatting whitespace. Only whitespace containing a
+// newline is dropped, which is safe for mixed content, xml:space="preserve"
+// and base64. CDATA payloads collapse to one space; tags, comments and PIs are
+// kept verbatim. One token pass keeps it linear.
 export function minifyXML(xml) {
   const text = xml == null ? '' : xml;
   if (!text.trim()) return text;
@@ -229,23 +170,9 @@ export function minifyXML(xml) {
 // quote characters here; escaping happens afterwards on the pieces.
 const ATTR_RE = /([\w:.\-]+)\s*=\s*("[^"]*"|'[^']*')/g;
 
-// highlightXML returns HTML with XML syntax colouring.
-//
-// The previous implementation ran three sequential global replaces over the
-// escaped text. The tag regex,
-//
-//     /(&lt;\/?)([\w:.-]+)((?:[^&]|&(?!gt;))*?)(\/?&gt;)/
-//
-// had overlapping match classes: [\w:.-] and the lazy "anything but &gt;"
-// group both consumed word characters, so a "&lt;" followed by a long run of
-// word characters with no closing "&gt;" (a truncated tag, a long URL or hex
-// identifier) degraded into O(n²) backtracking. Measured: 16 K characters took
-// 389 ms and extrapolated to seconds at 64 K. It also wrapped comments and
-// CDATA first and then re-matched tags inside them, producing nested spans and
-// broken colouring.
-//
-// This version tokenises once and colours each token independently: no
-// backtracking, no nesting, and linear in the input length.
+// highlightXML returns syntax-coloured HTML. It tokenises once and colours each
+// token independently, so there is no regex backtracking or nested-span bug;
+// runtime is linear in the input length.
 export function highlightXML(xml) {
   const text = xml == null ? '' : String(xml);
   const tokens = text.match(TOKEN_RE);

@@ -1,43 +1,11 @@
-// Popover menu anchored to a row button. Used by the project row's "⋯" trigger
-// so the row keeps only its primary action visible.
-//
-// The menu lives at <body> level with position: fixed, because the tree pane
-// scrolls (overflow: auto) and would otherwise clip it.
+// Body-level popover menu for tree rows, so the scrolling tree cannot clip it.
 
 import { $, escapeHtml } from './dom.js';
+import { placeMenu } from './popover.js';
 
 const MENU_ID = 'rowMenu';
 
 let current = null; // { anchor, items, onSelect, cleanup }
-
-function place(menu, anchor) {
-  // Lay out at the origin first so the measured size is trustworthy.
-  menu.style.left = '0px';
-  menu.style.top = '0px';
-
-  const rect = anchor.getBoundingClientRect();
-  const size = menu.getBoundingClientRect();
-  const gap = 4;
-  const margin = 8;
-
-  // Right-align with the trigger, then keep it inside the viewport.
-  let left = rect.right - size.width;
-  if (left + size.width > window.innerWidth - margin) {
-    left = window.innerWidth - margin - size.width;
-  }
-  if (left < margin) left = margin;
-
-  // Prefer opening downwards; flip above the trigger when there is no room.
-  let top = rect.bottom + gap;
-  if (top + size.height > window.innerHeight - margin) {
-    const above = rect.top - size.height - gap;
-    top = above >= margin ? above : window.innerHeight - margin - size.height;
-  }
-  if (top < margin) top = margin;
-
-  menu.style.left = Math.round(left) + 'px';
-  menu.style.top = Math.round(top) + 'px';
-}
 
 export function closeRowMenu() {
   if (!current) return;
@@ -80,7 +48,7 @@ export function openRowMenu({ anchor, items, onSelect }) {
   anchor.setAttribute('aria-expanded', 'true');
   const anchorRow = anchor.closest('.tree-node');
   if (anchorRow) anchorRow.classList.add('menu-open');
-  place(menu, anchor);
+  placeMenu(menu, anchor, 'right');
 
   const onPointerDown = (event) => {
     if (menu.contains(event.target) || event.target === anchor) return;

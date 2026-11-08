@@ -23,7 +23,7 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 - **并发安全**：工程读写返回值均为深拷贝，写操作走「克隆 → 落盘 → 换入」，磁盘失败时内存状态不变；改代理走窄接口，不会用旧快照覆盖其他标签页的改动。发送带请求令牌，切换请求样例后迟到的响应会被丢弃，并支持中途取消。
 - **多标签页工作空间保护**：每个写请求携带当前工作空间 id；若另一个标签页切换了工作空间，旧标签页的写请求返回 409 而不是写进错误的空间。顶栏每 10 秒心跳也会发现外部切换，无未保存修改时自动同步，有修改时先提示。
 - **界面优化**：支持白天/夜间主题切换（跟随系统，记忆选择）；左中右三栏可拖动调整宽度（记忆宽度，窗口缩放自动收敛）；窄屏自动切换为请求/响应上下堆叠；长标题自动省略不撑高行；顶栏「本地服务状态」每 10 秒探活 `/api/health`，后端停止后自动变红提示“已断开”，点击可立即重试。
-- **可维护前端**：前端按职责拆分为 ES Modules（state / api / workspace / xml / tree / editor / response / proxy / wsdlurl / theme / layout），无构建步骤、无外部依赖，仍随 Go 二进制内嵌分发。
+- **可维护前端**：前端按职责拆分为 ES Modules（state / api / workspace / popover / xml / tree / editor / response / proxy / wsdlurl / theme / layout），无构建步骤、无外部依赖，仍随 Go 二进制内嵌分发。
 
 > 范围说明：本项目**只做**"导入 + WSDL 生成请求模板 + 发送测试"。
 > 不包含断言引擎、Groovy 脚本、WS-Security —— 这些是 SoapUI 兼容的深水区，明确不在范围内。
@@ -65,6 +65,7 @@ internal/wsdl       WSDL 1.1 + XSD 解析与请求模板生成
 internal/wsdlfetch  从 URL 抓取 WSDL（协议/大小/超时限制，走工程代理）
 internal/store      工程数据持久化（JSON 原子写入）
 internal/workspace  工作空间注册表（settings.json / 切换 / 迁移 / 软删除）
+internal/fileutil   原子 JSON 写入与 UTF-8 BOM 处理（store/workspace 共用）
 internal/api        REST API（路由按 method + path wildcard 注册）
 web/assets/index.html  页面骨架
 web/assets/style.css   设计变量 / 三栏布局 / 响应式样式
@@ -73,6 +74,7 @@ web/assets/js/         前端 ES Modules（无构建步骤）
   state.js             共享状态与树查找
   api.js               API 客户端（工作空间请求头 / 409 处理）
   workspace.js         工作空间切换器与增删改
+  popover.js           弹出菜单定位（rowmenu/workspace 共用）
   xml.js               XML 格式化 / 压缩 / 语法高亮 / 换行规整
   tree.js              工程树渲染与 CRUD
   editor.js            请求编辑与发送

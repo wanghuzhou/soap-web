@@ -114,20 +114,10 @@ func storeFrom(r *http.Request) *store.Store {
 	return workspaceFrom(r).store
 }
 
-// staticHandler serves the embedded frontend with explicit cache headers.
-//
-// http.FileServer over an embed.FS emits neither Last-Modified nor ETag, because
-// embedded files have a zero modification time. With no Cache-Control either,
-// browsers fall back to heuristic caching: after upgrading the binary, the
-// browser could keep serving the old JS/CSS, producing the confusing "backend
-// is fixed but the UI still misbehaves" situation. ES modules make it worse,
-// since a stale entry caches the whole dependency graph.
-//
-// The fix is a strong ETag derived from the file content plus
-// `Cache-Control: no-cache`, which means "store it, but revalidate before use".
-// The browser therefore always confirms freshness (a cheap 304 when unchanged)
-// and can never run stale assets. Content hashes are computed once per file and
-// cached for the lifetime of the process, so revalidation costs a map lookup.
+// staticHandler serves the embedded frontend with a content-hash ETag and
+// Cache-Control: no-cache. embed.FS has no modification time, so without them
+// the browser would heuristically cache stale JS/CSS after an upgrade; no-cache
+// means "store, but revalidate", a cheap 304 when unchanged.
 func staticHandler(fs http.FileSystem) http.Handler {
 	fileServer := http.FileServer(fs)
 	var (
@@ -390,15 +380,9 @@ func (s *Server) handleFetchWSDL(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// persistWSDLProject turns a parsed WSDL service into a saved project.
-//
-// source records where the document came from (a filename for uploads, the
-// final URL for remote imports) so the project tree can show its origin.
-//
-// Every operation gets one generated request sample (a model.Call). SoapUI
-// creates a request per operation on WSDL import, and without it opening a
-// freshly imported project shows an empty editor until the user manually adds
-// one — which looks exactly like "the import failed" to a first-time user.
+// persistWSDLProject saves a parsed WSDL service as a project. source records
+// where the document came from (filename or final URL). Every operation gets
+// one generated request sample, matching SoapUI's import behaviour.
 func (s *Server) persistWSDLProject(st *store.Store, service *wsdl.Result, fallbackName, source, projectSource string) (model.Project, error) {
 	serviceName := service.Name
 	if serviceName == "" {

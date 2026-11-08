@@ -1,16 +1,6 @@
-// Workspace switcher regression checks.
-//
-// Runs the real workspace.js under a minimal DOM stub. Run with:
-//
+// Workspace switcher: state/title/request header stay in sync, and an external
+// switch never auto-syncs over unsaved editor contents. Runs under a DOM stub.
 //     node web/selftest/workspace.selftest.mjs
-//
-// Regression it guards:
-//   - applyWorkspace() must update state, the top-bar label, the document
-//     title and the request header source of truth together. A tab whose
-//     workspaceId lags behind the server is exactly how a write lands in the
-//     wrong workspace.
-//   - an external switch must not auto-sync over unsaved editor contents: it
-//     has to mark the tab stale instead, so the user decides.
 
 // ---------- minimal DOM stub ----------
 class El {
@@ -88,7 +78,7 @@ globalThis.localStorage = {
 
 // ---------- run the real modules ----------
 const base = new URL('../assets/js/', import.meta.url);
-const { state } = await import(new URL('state.js', base).href);
+const { state, workspaceLandedIn } = await import(new URL('state.js', base).href);
 const { initWorkspace, applyWorkspace, handleServerWorkspace } = await import(new URL('workspace.js', base).href);
 
 let failures = 0;
@@ -118,6 +108,11 @@ check('顶栏显示名字而非文件', getEl('workspaceName').textContent === '
   getEl('workspaceName').textContent);
 check('窗口标题跟随工作空间', document.title === 'soap-web · 测试空间', document.title);
 check('切换后清除过期标记', state.workspaceStale === false);
+
+// Import results must report a workspace change, but stay silent when the
+// project is visible in the workspace the import started in.
+check('导入落到其他工作空间时返回名字', workspaceLandedIn({ workspaceId: 'w2' }, 'w1') === '另一个');
+check('导入仍在当前工作空间时不提示', workspaceLandedIn({ workspaceId: 'w1' }, 'w1') === '');
 
 // Same workspace from the heartbeat: no stale state, no resync.
 handleServerWorkspace({ id: 'w1', name: '测试空间' });

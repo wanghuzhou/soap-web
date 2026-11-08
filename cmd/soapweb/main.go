@@ -73,13 +73,9 @@ func main() {
 	}
 }
 
-// resolveDataDir turns the -data flag into a data directory plus an optional
-// legacy projects.json file to adopt as the initial workspace.
-//
-// The old flag took a projects.json path, and existing shortcuts pass one. We
-// keep that working: a .json path means "use its directory as the data root and
-// this file as the default workspace". A directory (or no flag) means the new
-// layout, with settings.json inside it.
+// resolveDataDir turns -data into a data directory plus an optional legacy
+// projects.json. A .json path means "use its directory, adopt this file"; a
+// directory (or no flag) uses the settings.json layout.
 func resolveDataDir(raw string) (dir, legacy string) {
 	if raw == "" {
 		base := "."
@@ -104,11 +100,8 @@ func resolveDataDir(raw string) (dir, legacy string) {
 }
 
 // openRegistry opens the data directory, falling back to a per-user location
-// when the default (next to the executable) is not writable.
-//
-// Only permission errors trigger the fallback: a corrupt settings.json must
-// keep failing loudly instead of silently starting on a fresh, empty data set.
-// An explicit -data path never falls back — the user named that exact directory.
+// when the default is not writable. Only permission errors trigger the
+// fallback; an explicit -data path never does.
 func openRegistry(dir, legacy string, allowFallback bool) (*workspace.Registry, error) {
 	reg, err := workspace.Open(dir, legacy)
 	if err == nil {

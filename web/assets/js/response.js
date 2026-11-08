@@ -73,13 +73,8 @@ export function renderResponse() {
   body.scrollTop = 0;
 }
 
-// prettyHtml lazily computes and caches the highlighted HTML for a response.
-//
-// Switching between the "格式化" and "原始" tabs used to re-run prettyXML plus
-// highlightXML over the whole body every time. For a few hundred KB of XML that
-// is tens of milliseconds per click, and it also re-triggered the old
-// backtracking regex. The cache lives on the response object, so it is
-// discarded automatically when state.response is replaced.
+// prettyHtml lazily caches the highlighted HTML on the response object, so tab
+// switches do not re-run prettyXML/highlightXML over the whole body.
 function prettyHtml(response) {
   if (response._prettyHtml == null) {
     response._prettyHtml = highlightXML(prettyXML(response.body || ''));

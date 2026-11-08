@@ -150,18 +150,10 @@ func Parse(data []byte) (*Result, error) {
 
 	res := &Result{Name: d.Name, TargetNS: d.TargetNS}
 
-	// Iterate the declaration order, not a name-keyed map.
-	//
-	// Walking a map made the resulting operation order non-deterministic: the
-	// same WSDL could yield a different ordering on each parse, which showed up
-	// as an unstable project tree and non-reproducible exports.
-	//
-	// A WSDL commonly declares two bindings for one portType (SOAP 1.1 and
-	// SOAP 1.2, sometimes also a plain HTTP binding). Iterating every binding
-	// duplicated each operation once per binding, producing indistinguishable
-	// entries. We therefore keep the first binding that exposes a given
-	// operation and skip later ones, recording the alternatives on the
-	// operation so the UI can still surface them.
+	// Iterate declaration order, not a name-keyed map: map order made the
+	// project tree and exports non-deterministic. A portType often has two
+	// bindings (SOAP 1.1/1.2); keep the first and record the rest on the
+	// operation.
 	seenOp := map[string]bool{}
 	// opBindings collects every binding exposing a given operation name, so an
 	// operation carries the full set of protocols it is reachable through.

@@ -12,19 +12,9 @@ import { renderResponse } from './response.js';
 
 let reloadHandler = async () => {};
 
-// Send state.
-//
-// The previous implementation guarded concurrency with button.disabled alone,
-// which three paths could bypass: loadNode() calls updateEditButtons() and
-// re-enables the button while a request is in flight; the global Ctrl+Enter
-// shortcut calls send() directly without checking anything; and there was no
-// AbortController. Combined with state.response being a global singleton that
-// loadNode() never cleared, a response for request A could be rendered onto
-// the panel of request B, which is the worst possible failure for a debugging
-// tool.
-//
-// Now: `sending` is the real gate, `sendSeq` identifies the current request so
-// late responses are discarded, and `abortController` lets the user cancel.
+// Send state: `sending` gates the button and Ctrl+Enter, `sendSeq` discards
+// late responses, and `abortController` supports cancel. All three are needed
+// so a response for request A can never render onto request B's panel.
 let sending = false;
 let sendSeq = 0;
 let abortController = null;
@@ -268,17 +258,8 @@ function minifyBody() {
 // indentation prettyXML emits.
 const INDENT = '  ';
 
-// handleEditorKeydown implements Tab / Shift+Tab indentation.
-//
-// The previous implementation assigned textarea.value wholesale, which had two
-// defects: it wiped the native undo stack (Ctrl+Z could not restore the
-// indentation) and it replaced the entire selection with a single indent
-// (selecting N lines and pressing Tab deleted N lines of XML).
-//
-// Now: a collapsed caret inserts one indent via execCommand (the only path that
-// preserves the undo stack, with setRangeText as fallback), and a multi-line
-// selection indents or outdents every line it touches while restoring the
-// selection.
+// handleEditorKeydown implements Tab / Shift+Tab. It indents every line in a
+// multi-line selection and uses execCommand/setRangeText so undo still works.
 function handleEditorKeydown(event) {
   if (event.key !== 'Tab') return;
   event.preventDefault();
@@ -360,14 +341,8 @@ function callURL(ids) {
     + '/calls/' + encodeURIComponent(ids.cid);
 }
 
-// send executes the current request, or cancels the in-flight one.
-//
-// Concurrency rules:
-//   - `sending` is the single source of truth; Ctrl+Enter cannot bypass it.
-//   - Each request captures the ids it was started for. When the response
-//     arrives, it is discarded if the selection has moved on or a newer send
-//     has superseded it, so a response never renders onto another sample's
-//     panel.
+// send executes the current request, or cancels the in-flight one. Each request
+// captures its ids; a late response is dropped if the selection moved on.
 async function send() {
   // Clicking while a request is in flight cancels it.
   if (sending) {
