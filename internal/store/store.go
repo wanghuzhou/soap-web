@@ -250,7 +250,7 @@ func (s *Store) AddProject(p model.Project) (model.Project, error) {
 	if p.Name == "" {
 		p.Name = "未命名工程"
 	}
-	assignIDs(&p)
+	EnsureIDs(&p)
 	err := s.commit(func(list []model.Project) ([]model.Project, error) {
 		return append(list, cloneProject(p)), nil
 	})
@@ -529,8 +529,8 @@ func (s *Store) DeleteCall(projectID, serviceID, opID, callID string) error {
 	})
 }
 
-// assignIDs fills in missing ids throughout a project tree.
-func assignIDs(p *model.Project) {
+// EnsureIDs fills in missing ids throughout a project tree.
+func EnsureIDs(p *model.Project) {
 	if p.ID == "" {
 		p.ID = NewID()
 	}

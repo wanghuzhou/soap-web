@@ -12,6 +12,7 @@ import { initProxy } from './proxy.js';
 import { initLayout } from './layout.js';
 import { initWsdlUrl } from './wsdlurl.js';
 import { initWorkspace, loadWorkspaceInfo, handleServerWorkspace } from './workspace.js';
+import { initWorkspaceIO, openExportDialog, pickWorkspaceFile } from './workspaceio.js';
 
 let pendingFileMode = null;
 
@@ -226,6 +227,7 @@ async function boot() {
   initProxy({ reload });
   initLayout();
   initWsdlUrl({ reload, onImported: selectProject });
+  initWorkspaceIO();
   initWorkspace({
     // Called after a switch/create/delete/external sync: the previous
     // selection, response and collapse state belong to another workspace.
@@ -235,6 +237,8 @@ async function boot() {
       initCollapsed(state.workspaceId);
       await loadProjects(false);
     },
+    onExport: openExportDialog,
+    onImport: pickWorkspaceFile,
   });
 
   $('btnNewProject').addEventListener('click', createProject);

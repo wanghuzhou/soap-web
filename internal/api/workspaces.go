@@ -1,9 +1,15 @@
 package api
 
 import (
+	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 
+	"soapweb/internal/fileutil"
+	"soapweb/internal/model"
 	"soapweb/internal/workspace"
 )
 
@@ -16,6 +22,8 @@ func (s *Server) registerWorkspaceRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/workspaces", s.handleListWorkspaces)
 	mux.HandleFunc("POST /api/workspaces", s.handleCreateWorkspace)
 	mux.HandleFunc("POST /api/workspaces/switch", s.handleSwitchWorkspace)
+	mux.HandleFunc("POST /api/workspaces/export", s.handleExportWorkspace)
+	mux.HandleFunc("POST /api/workspaces/import", s.handleImportWorkspace)
 	mux.HandleFunc("PATCH /api/workspaces/{wid}", s.handleRenameWorkspace)
 	mux.HandleFunc("DELETE /api/workspaces/{wid}", s.handleDeleteWorkspace)
 }
@@ -83,6 +91,57 @@ func (s *Server) handleSwitchWorkspace(w http.ResponseWriter, r *http.Request) {
 	s.writeWorkspaces(w)
 }
 
+type exportWorkspaceRequest struct {
+	KeepProxy bool `json:"keepProxy"`
+}
+
+// handleExportWorkspace returns the active workspace as a bare project array,
+// optionally without each project's proxy settings. The array is the same
+// format as a workspace file, so it can be imported back directly.
+func (s *Server) handleExportWorkspace(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[exportWorkspaceRequest](w, r)
+	if !ok {
+		return
+	}
+	projects := storeFrom(r).List()
+	if !req.KeepProxy {
+		for i := range projects {
+			projects[i].Proxy = nil
+		}
+	}
+	log.Printf("导出工作空间「%s」：%d 个工程（保留代理：%v）", workspaceFrom(r).info.Name, len(projects), req.KeepProxy)
+	writeJSON(w, http.StatusOK, projects)
+}
+
+// handleImportWorkspace reads a workspace JSON array and creates a new
+// workspace from it. The optional name query parameter defaults to the upload
+// filename.
+func (s *Server) handleImportWorkspace(w http.ResponseWriter, r *http.Request) {
+	data, filename, err := readUpload(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "读取文件失败: "+err.Error())
+		return
+	}
+	var projects []model.Project
+	if err := json.Unmarshal(fileutil.StripBOM(data), &projects); err != nil {
+		writeErr(w, http.StatusBadRequest, "不是有效的工作空间 JSON（应为工程数组）: "+err.Error())
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		name = strings.TrimSuffix(filename, filepath.Ext(filename))
+	}
+	if name == "" {
+		name = "导入的工作空间"
+	}
+	if _, err := s.Workspaces.Import(name, projects); err != nil {
+		mapWorkspaceErr(w, err)
+		return
+	}
+	log.Printf("导入工作空间「%s」：%d 个工程", name, len(projects))
+	s.writeWorkspaces(w)
+}
+
 func (s *Server) handleRenameWorkspace(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeJSON[workspaceNameRequest](w, r)
 	if !ok {
@@ -110,7 +169,8 @@ func mapWorkspaceErr(w http.ResponseWriter, err error) {
 		writeErr(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, workspace.ErrInvalidName),
 		errors.Is(err, workspace.ErrDuplicateName),
-		errors.Is(err, workspace.ErrLastWorkspace):
+		errors.Is(err, workspace.ErrLastWorkspace),
+		errors.Is(err, workspace.ErrInvalidProject):
 		writeErr(w, http.StatusBadRequest, err.Error())
 	default:
 		writeErr(w, http.StatusInternalServerError, err.Error())

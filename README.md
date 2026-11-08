@@ -8,6 +8,7 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 ## 特性
 
 - **工作空间**：工程按工作空间隔离，每个工作空间一个独立的 JSON 文件。顶栏下拉即可新建 / 切换 / 重命名 / 删除，切换无需重启；界面只显示工作空间名字，文件路径是内部细节。`settings.json` 记录当前空间与「名字 → 文件」映射，重启后回到上次使用的空间。
+- **工作空间导入/导出**：可把当前工作空间导出为 JSON 文件，导出时可选是否保留工程代理配置（默认不保留，避免把代理密码带到别的机器）；导入 JSON 会新建一个工作空间并切换过去。
 - **工程持久化**：导入的 SoapUI 工程、解析的 WSDL 会保存在当前工作空间的 JSON 文件，重启/刷新不丢失。
 - **完整增删改**：工程 / 服务(service) / 操作(operation) / 请求样例(call) 均可新建、重命名、删除；删除有二次确认。
 - **工程级代理**：每个工程可单独设置 **系统代理 / 直连 / 自定义代理**；自定义支持 **HTTP** 与 **SOCKS5**，用户名密码可留空。用于内网服务无法直连的场景。
@@ -74,6 +75,7 @@ web/assets/js/         前端 ES Modules（无构建步骤）
   state.js             共享状态与树查找
   api.js               API 客户端（工作空间请求头 / 409 处理）
   workspace.js         工作空间切换器与增删改
+  workspaceio.js       工作空间 JSON 导入/导出
   popover.js           弹出菜单定位（rowmenu/workspace 共用）
   xml.js               XML 格式化 / 压缩 / 语法高亮 / 换行规整
   tree.js              工程树渲染与 CRUD
@@ -111,6 +113,8 @@ node web/selftest/workspace.selftest.mjs   # 工作空间切换器回归自测�
 | GET | `/api/workspaces` | 工作空间列表 + 当前工作空间（只含 id/name） |
 | POST | `/api/workspaces` | 新建工作空间并切换（`{name}`） |
 | POST | `/api/workspaces/switch` | 切换工作空间（`{id}`） |
+| POST | `/api/workspaces/export` | 导出当前工作空间为工程数组（`{keepProxy}`，默认不保留代理） |
+| POST | `/api/workspaces/import` | 导入工程数组为新工作空间（可选 `?name=`，默认用文件名） |
 | PATCH | `/api/workspaces/{wid}` | 重命名工作空间（`{name}`） |
 | DELETE | `/api/workspaces/{wid}` | 删除工作空间（文件移入 `data/trash`；至少保留一个） |
 | POST | `/api/send` | 发送 HTTP/SOAP 请求，返回状态、头、体、耗时 |
@@ -164,3 +168,4 @@ data/
 - 写入采用临时文件 + 原子 rename，避免崩溃导致文件损坏。切换工作空间时先加载并校验目标文件，失败则保持当前空间与 `settings.json` 不变。
 - `settings.json` 本身损坏（JSON 语法错误、路径越界、重名等）时程序会拒绝启动并在控制台指出文件；单个工作空间文件损坏时只在切换到它时报错，当前空间不受影响。
 - 删除工作空间不会直接删文件，而是移到 `data/trash/<id>-<时间>.json`；最后一个工作空间不允许删除。需要恢复时，把备份文件移回 `data/workspaces/` 并在 `settings.json` 里补回一条映射即可。
+- 导出工作空间默认移除每个工程的 `proxy` 字段；勾选「保留代理配置」才会带出（含明文密码）。

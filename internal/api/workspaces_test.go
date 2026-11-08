@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"soapweb/internal/model"
@@ -250,6 +252,144 @@ func TestImportStaysInWorkspaceItStartedIn(t *testing.T) {
 	secondStore, _ := reg.Active()
 	if got := secondStore.List(); len(got) != 0 {
 		t.Errorf("switched-to workspace must stay empty, got %d", len(got))
+	}
+}
+
+// TestExportWorkspaceProxyOption covers the export switch: proxies are dropped
+// by default and preserved when keepProxy is true.
+func TestExportWorkspaceProxyOption(t *testing.T) {
+	_, mux, st := newTestServer(t)
+	current := decodeWorkspaces(t, workspaceRequest(t, mux, http.MethodGet, "/api/workspaces", nil, "")).Current
+	project, err := st.AddProject(model.Project{
+		Name:  "with-proxy",
+		Proxy: &model.ProxySettings{Mode: "custom", Type: "http", Host: "127.0.0.1", Port: 8080},
+		Services: []model.Service{{
+			Name:       "svc",
+			Operations: []model.Operation{{Name: "op"}},
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	export := func(keep bool) []model.Project {
+		t.Helper()
+		rec := workspaceRequest(t, mux, http.MethodPost, "/api/workspaces/export",
+			map[string]bool{"keepProxy": keep}, current.ID)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("export keepProxy=%v: %d %s", keep, rec.Code, rec.Body.String())
+		}
+		var projects []model.Project
+		if err := json.Unmarshal(rec.Body.Bytes(), &projects); err != nil {
+			t.Fatal(err)
+		}
+		return projects
+	}
+
+	without := export(false)
+	if len(without) != 1 {
+		t.Fatalf("exported projects = %d, want 1", len(without))
+	}
+	if without[0].Proxy != nil {
+		t.Errorf("proxy should be dropped by default: %+v", without[0].Proxy)
+	}
+	if without[0].ID != project.ID || without[0].Name != "with-proxy" {
+		t.Errorf("project identity lost: %+v", without[0])
+	}
+	if len(without[0].Services) != 1 || without[0].Services[0].Operations[0].Name != "op" {
+		t.Errorf("project content lost: %+v", without[0].Services)
+	}
+
+	with := export(true)
+	if with[0].Proxy == nil || with[0].Proxy.Host != "127.0.0.1" || with[0].Proxy.Port != 8080 {
+		t.Errorf("proxy should be preserved: %+v", with[0].Proxy)
+	}
+}
+
+// TestImportWorkspace exports a project and imports it as a new workspace.
+func TestImportWorkspace(t *testing.T) {
+	_, mux, st := newTestServer(t)
+	current := decodeWorkspaces(t, workspaceRequest(t, mux, http.MethodGet, "/api/workspaces", nil, "")).Current
+	project, err := st.AddProject(model.Project{
+		Name:     "imported",
+		Proxy:    &model.ProxySettings{Mode: "direct"},
+		Services: []model.Service{{Name: "svc"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exportRec := workspaceRequest(t, mux, http.MethodPost, "/api/workspaces/export",
+		map[string]bool{"keepProxy": true}, current.ID)
+	var projects []model.Project
+	if err := json.Unmarshal(exportRec.Body.Bytes(), &projects); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := workspaceRequest(t, mux, http.MethodPost,
+		"/api/workspaces/import?name="+url.QueryEscape("导入空间"), projects, current.ID)
+	payload := decodeWorkspaces(t, rec)
+	if payload.Current.Name != "导入空间" {
+		t.Errorf("current = %+v", payload.Current)
+	}
+	if len(payload.Workspaces) != 2 {
+		t.Errorf("workspaces = %+v", payload.Workspaces)
+	}
+
+	var imported []model.Project
+	listRec := workspaceRequest(t, mux, http.MethodGet, "/api/projects", nil, payload.Current.ID)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("list imported: %d %s", listRec.Code, listRec.Body.String())
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &imported); err != nil {
+		t.Fatal(err)
+	}
+	if len(imported) != 1 || imported[0].Name != "imported" {
+		t.Fatalf("imported projects = %+v", imported)
+	}
+	if imported[0].ID != project.ID || imported[0].Proxy == nil || imported[0].Proxy.Mode != "direct" {
+		t.Errorf("imported project lost id/proxy: %+v", imported[0])
+	}
+
+	// The same name cannot be imported twice.
+	dup := workspaceRequest(t, mux, http.MethodPost,
+		"/api/workspaces/import?name="+url.QueryEscape("导入空间"), projects, payload.Current.ID)
+	if dup.Code != http.StatusBadRequest {
+		t.Errorf("duplicate import status = %d, want 400", dup.Code)
+	}
+}
+
+// TestImportWorkspaceRejectsInvalidData covers malformed JSON, invalid proxy
+// settings and stale-tab exports.
+func TestImportWorkspaceRejectsInvalidData(t *testing.T) {
+	_, mux, _ := newTestServer(t)
+	current := decodeWorkspaces(t, workspaceRequest(t, mux, http.MethodGet, "/api/workspaces", nil, "")).Current
+
+	badJSON := httptest.NewRequest(http.MethodPost, "/api/workspaces/import?name=bad", strings.NewReader("{not json"))
+	badJSON.Header.Set("Content-Type", "application/json")
+	badJSON.Header.Set(workspaceHeader, current.ID)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, badJSON)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid JSON status = %d, want 400", rec.Code)
+	}
+
+	badProxy := []model.Project{{
+		Name:  "bad",
+		Proxy: &model.ProxySettings{Mode: "custom", Type: "http", Host: "", Port: 0},
+	}}
+	rec = workspaceRequest(t, mux, http.MethodPost, "/api/workspaces/import?name=bad-proxy", badProxy, current.ID)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid proxy status = %d, want 400", rec.Code)
+	}
+
+	// Create a second workspace, then try to export with the old id.
+	other := decodeWorkspaces(t, workspaceRequest(t, mux, http.MethodPost, "/api/workspaces",
+		map[string]string{"name": "另一个"}, ""))
+	rec = workspaceRequest(t, mux, http.MethodPost, "/api/workspaces/export",
+		map[string]bool{"keepProxy": false}, current.ID)
+	if rec.Code != http.StatusConflict {
+		t.Errorf("stale export status = %d, want 409 (current is %s)", rec.Code, other.Current.ID)
 	}
 }
 

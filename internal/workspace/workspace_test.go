@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -131,6 +132,112 @@ func TestOpenCorruptSettingsNotOverwritten(t *testing.T) {
 	}
 	if string(got) != string(bad) {
 		t.Errorf("corrupt settings.json was modified: %q", string(got))
+	}
+}
+
+// TestImportCreatesWorkspace imports a project array as a new, active
+// workspace, filling in missing ids and persisting across a reopen.
+func TestImportCreatesWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	reg, err := Open(dir, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	info, err := reg.Import("导入空间", []model.Project{{
+		Name:  "imported",
+		Proxy: &model.ProxySettings{Mode: "direct"},
+		Services: []model.Service{{
+			Name: "svc",
+			Operations: []model.Operation{{
+				Name:  "op",
+				Calls: []model.Call{{Title: "c"}},
+			}},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if reg.CurrentInfo().ID != info.ID || info.Name != "导入空间" {
+		t.Errorf("current = %+v, want %+v", reg.CurrentInfo(), info)
+	}
+
+	st, _ := reg.Active()
+	list := st.List()
+	if len(list) != 1 || list[0].Name != "imported" {
+		t.Fatalf("projects = %+v", list)
+	}
+	project := list[0]
+	if project.ID == "" || project.Services[0].ID == "" ||
+		project.Services[0].Operations[0].ID == "" ||
+		project.Services[0].Operations[0].Calls[0].ID == "" {
+		t.Errorf("missing ids were not filled: %+v", project)
+	}
+	if project.Proxy == nil || project.Proxy.Mode != "direct" {
+		t.Errorf("proxy lost: %+v", project.Proxy)
+	}
+
+	reopened, err := Open(dir, "")
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if reopened.CurrentInfo().ID != info.ID {
+		t.Errorf("current after reopen = %q, want %q", reopened.CurrentInfo().ID, info.ID)
+	}
+	if s := readSettings(t, dir); len(s.Workspaces) != 2 || s.Workspaces[1].Name != "导入空间" {
+		t.Errorf("settings = %+v", s)
+	}
+}
+
+// TestImportRejectsInvalidProxy leaves the registry untouched.
+func TestImportRejectsInvalidProxy(t *testing.T) {
+	reg, err := Open(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	before := len(reg.List())
+	_, err = reg.Import("bad", []model.Project{{
+		Name:  "p",
+		Proxy: &model.ProxySettings{Mode: "custom", Type: "http", Host: "", Port: 0},
+	}})
+	if !errors.Is(err, ErrInvalidProject) {
+		t.Fatalf("Import error = %v, want ErrInvalidProject", err)
+	}
+	if got := len(reg.List()); got != before {
+		t.Errorf("workspaces = %d, want unchanged %d", got, before)
+	}
+}
+
+// TestImportDuplicateName is rejected like Create.
+func TestImportDuplicateName(t *testing.T) {
+	reg, err := Open(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := reg.Create("dup"); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := reg.Import("dup", []model.Project{{Name: "p"}}); err != ErrDuplicateName {
+		t.Errorf("Import error = %v, want ErrDuplicateName", err)
+	}
+}
+
+// TestImportEmptyArray creates a valid empty workspace.
+func TestImportEmptyArray(t *testing.T) {
+	reg, err := Open(t.TempDir(), "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	info, err := reg.Import("空空间", []model.Project{})
+	if err != nil {
+		t.Fatalf("Import: %v", err)
+	}
+	if reg.CurrentInfo().ID != info.ID {
+		t.Errorf("current = %+v", reg.CurrentInfo())
+	}
+	st, _ := reg.Active()
+	if got := st.List(); len(got) != 0 {
+		t.Errorf("projects = %+v", got)
 	}
 }
 

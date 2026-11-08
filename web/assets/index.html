@@ -169,6 +169,7 @@
   </div>
 
   <input id="fileInput" type="file" accept=".xml,.wsdl" hidden>
+  <input id="workspaceFileInput" type="file" accept=".json,application/json" hidden>
 
   <!-- Proxy settings dialog (per project) -->
   <div id="proxyOverlay" class="modal-overlay hidden">
@@ -277,6 +278,28 @@
       <div class="modal-foot">
         <button id="wsdlUrlCancel" class="btn ghost">取消</button>
         <button id="wsdlUrlImport" class="btn primary">获取并导入</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export workspace dialog -->
+  <div id="exportOverlay" class="modal-overlay hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="exportTitle">
+      <div class="modal-head">
+        <span id="exportTitle">导出工作空间</span>
+        <button id="exportClose" class="modal-x" title="关闭" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body modal-form">
+        <div class="modal-sub">导出当前工作空间的工程 JSON，可在另一台机器或另一个实例导入。</div>
+        <label class="radio-row">
+          <input id="exportKeepProxy" type="checkbox">
+          <span><b>保留代理配置</b><small>包含代理地址、用户名和密码；默认不保留</small></span>
+        </label>
+        <div class="modal-sub">不保留时，导出文件会移除每个工程的 proxy 字段。</div>
+      </div>
+      <div class="modal-foot">
+        <button id="exportCancel" class="btn ghost">取消</button>
+        <button id="exportConfirm" class="btn primary">导出</button>
       </div>
     </div>
   </div>

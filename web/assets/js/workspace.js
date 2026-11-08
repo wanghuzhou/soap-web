@@ -10,6 +10,8 @@ import { placeMenu } from './popover.js';
 import { toast } from './toast.js';
 
 let onEnter = async () => {};
+let onExport = () => {};
+let onImport = () => {};
 let menuOpen = false;
 let cleanupMenu = null;
 
@@ -17,6 +19,8 @@ let cleanupMenu = null;
 // workspace changes; the app uses it to reset the editor and reload projects.
 export function initWorkspace(options = {}) {
   onEnter = options.onEnter || onEnter;
+  onExport = options.onExport || onExport;
+  onImport = options.onImport || onImport;
   setWorkspaceMismatchHandler(markStale);
 
   const button = $('workspaceBtn');
@@ -111,7 +115,7 @@ async function syncNow(auto, expectedName) {
   }
 }
 
-async function enterWorkspace() {
+export async function enterWorkspace() {
   closeMenu();
   await onEnter();
 }
@@ -196,6 +200,8 @@ async function handleMenuClick(event) {
   if (action === 'create') await createWorkspace();
   else if (action === 'rename') await renameWorkspace();
   else if (action === 'delete') await deleteWorkspace();
+  else if (action === 'import') await onImport();
+  else if (action === 'export') await onExport();
 }
 
 function renderButton() {
@@ -227,6 +233,9 @@ function renderMenu() {
   menu.innerHTML = items
     + '<div class="row-menu-sep" role="separator"></div>'
     + '<button type="button" class="row-menu-item" role="menuitem" data-act="create">新建工作空间…</button>'
+    + '<button type="button" class="row-menu-item" role="menuitem" data-act="import">导入工作空间…</button>'
+    + '<button type="button" class="row-menu-item" role="menuitem" data-act="export">导出当前工作空间…</button>'
+    + '<div class="row-menu-sep" role="separator"></div>'
     + '<button type="button" class="row-menu-item" role="menuitem" data-act="rename">重命名当前…</button>'
     + `<button type="button" class="row-menu-item danger" role="menuitem" data-act="delete"${list.length <= 1 ? ' disabled' : ''}>删除当前…</button>`;
 }

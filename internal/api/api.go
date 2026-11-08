@@ -76,7 +76,7 @@ func (s *Server) withWorkspace(next http.Handler) http.Handler {
 		// The workspace endpoints themselves, and health, must stay reachable
 		// from a stale tab: health is how it discovers the switch, and the
 		// workspace API is how it recovers.
-		if !workspaceExempt(r.URL.Path) {
+		if !workspaceExempt(r) {
 			if want := r.Header.Get(workspaceHeader); want != "" && want != info.ID {
 				writeJSON(w, http.StatusConflict, map[string]any{
 					"error":     "工作空间已在其他窗口切换，请先同步后再操作",
@@ -93,9 +93,20 @@ func (s *Server) withWorkspace(next http.Handler) http.Handler {
 	})
 }
 
-// workspaceExempt reports whether a path bypasses the stale-workspace check.
-func workspaceExempt(path string) bool {
-	return path == "/api/health" || path == "/api/workspaces" || strings.HasPrefix(path, "/api/workspaces/")
+// workspaceExempt reports whether a request bypasses the stale-workspace check.
+// Only the workspace-management endpoints are exempt; import/export are scoped
+// to the active workspace and must be rejected from a stale tab.
+func workspaceExempt(r *http.Request) bool {
+	switch {
+	case r.URL.Path == "/api/health",
+		r.URL.Path == "/api/workspaces",
+		r.URL.Path == "/api/workspaces/switch":
+		return true
+	case strings.HasPrefix(r.URL.Path, "/api/workspaces/") &&
+		(r.Method == http.MethodPatch || r.Method == http.MethodDelete):
+		return true
+	}
+	return false
 }
 
 // workspaceFrom returns the workspace captured for this request. Every API

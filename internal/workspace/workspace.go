@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"soapweb/internal/fileutil"
+	"soapweb/internal/model"
 	"soapweb/internal/store"
 )
 
@@ -44,6 +45,8 @@ var (
 	ErrDuplicateName = errors.New("工作空间名称已存在")
 	// ErrInvalidName wraps every name validation failure.
 	ErrInvalidName = errors.New("工作空间名称无效")
+	// ErrInvalidProject wraps validation failures in an imported workspace.
+	ErrInvalidProject = errors.New("导入的工作空间数据无效")
 )
 
 // Info is the public view of a workspace. It deliberately carries no path:
@@ -364,18 +367,48 @@ func (r *Registry) Switch(id string) (Info, error) {
 	return Info{ID: w.ID, Name: w.Name}, nil
 }
 
-// Create adds a workspace and immediately makes it active, matching the
-// expected "新建并进入" behaviour.
+// Create adds an empty workspace and immediately makes it active.
 func (r *Registry) Create(rawName string) (Info, error) {
 	name, err := normalizeName(rawName)
 	if err != nil {
 		return Info{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.hasNameLocked(name, "") {
+		return Info{}, ErrDuplicateName
+	}
+	return r.createLocked(name, nil)
+}
+
+// Import creates a workspace from a projects.json-format array and makes it
+// active. Missing ids are filled in; proxy settings are validated before any
+// file is written.
+func (r *Registry) Import(rawName string, projects []model.Project) (Info, error) {
+	name, err := normalizeName(rawName)
+	if err != nil {
+		return Info{}, err
+	}
+	for i := range projects {
+		if err := projects[i].Proxy.Validate(); err != nil {
+			return Info{}, fmt.Errorf("%w：工程「%s」的代理配置无效: %v", ErrInvalidProject, projects[i].Name, err)
+		}
+		store.EnsureIDs(&projects[i])
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.hasNameLocked(name, "") {
 		return Info{}, ErrDuplicateName
+	}
+	return r.createLocked(name, projects)
+}
+
+// createLocked writes a new workspace file, registers it in settings.json and
+// activates it. Caller must hold the write lock and have checked the name.
+func (r *Registry) createLocked(name string, projects []model.Project) (Info, error) {
+	if projects == nil {
+		projects = []model.Project{}
 	}
 
 	id := store.NewID()
@@ -387,13 +420,11 @@ func (r *Registry) Create(rawName string) (Info, error) {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return Info{}, err
 	}
-	// Write a real (empty) file immediately: the mapping in settings.json then
-	// never points at a file that does not exist.
-	if err := os.WriteFile(p, []byte("[]\n"), 0o644); err != nil {
+	if err := fileutil.WriteJSONAtomic(p, projects, 0o644); err != nil {
 		return Info{}, err
 	}
-	// Load before persisting the mapping, mirroring Switch: a settings entry
-	// must never point at a file that failed to load.
+	// Load before persisting the mapping: a settings entry must never point at
+	// a file that failed to load.
 	st, err := store.New(p)
 	if err != nil {
 		_ = os.Remove(p)
@@ -410,7 +441,7 @@ func (r *Registry) Create(rawName string) (Info, error) {
 	r.settings = next
 	r.active = st
 	r.activeID = id
-	log.Printf("已创建工作空间：%s", name)
+	log.Printf("已创建工作空间：%s（%d 个工程）", name, len(projects))
 	return Info{ID: id, Name: name}, nil
 }
 
