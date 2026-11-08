@@ -247,3 +247,23 @@ func TestBackfillsLegacyWSDLCalls(t *testing.T) {
 		t.Errorf("after reload calls = %d, want 1", n)
 	}
 }
+
+// TestNewAcceptsUTF8BOM: a projects.json saved by an editor that adds a UTF-8
+// BOM must load instead of failing with "invalid character '\ufeff'".
+func TestNewAcceptsUTF8BOM(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "projects.json")
+	body := append([]byte{0xEF, 0xBB, 0xBF}, []byte(`[{"id":"p1","name":"bom"}]`)...)
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := New(path)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	list := s.List()
+	if len(list) != 1 || list[0].Name != "bom" {
+		t.Fatalf("projects = %+v", list)
+	}
+}

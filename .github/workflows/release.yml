@@ -92,7 +92,7 @@ jobs:
               '  pause' \
               '  exit /b 1' \
               ')' \
-              '"bin\soapweb.exe" -addr 127.0.0.1:8420 -data "bin\data\projects.json" %*' \
+              '"bin\soapweb.exe" -addr 127.0.0.1:8420 -data "bin\data" %*' \
               > "${STAGE}/start.bat"
           else
             cp start.sh "${STAGE}/"

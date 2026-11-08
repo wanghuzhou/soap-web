@@ -16,6 +16,7 @@
 package workspace
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -88,21 +89,50 @@ type Registry struct {
 // legacyFile is the old -data projects.json path when the user still passes a
 // file instead of a directory; it becomes the file of the initial "默认"
 // workspace so existing data keeps working without a migration step.
+//
+// A missing data directory, a missing settings.json and an empty settings.json
+// are all treated as a fresh install: the directory and a default configuration
+// are created before returning, so the caller never has to special-case them.
 func Open(dir, legacyFile string) (*Registry, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("解析数据目录 %q 失败: %w", dir, err)
 	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
-		return nil, err
+
+	// Check and create the data directory explicitly: os.MkdirAll alone would
+	// work, but the separate stat lets the log say whether this is a fresh
+	// install and lets the error name the directory that could not be created.
+	if info, statErr := os.Stat(abs); statErr == nil {
+		if !info.IsDir() {
+			return nil, fmt.Errorf("数据目录 %s 已被同名文件占用，请移走该文件或改用 -data 指定其他目录", abs)
+		}
+	} else if os.IsNotExist(statErr) {
+		if err := os.MkdirAll(abs, 0o755); err != nil {
+			return nil, fmt.Errorf("创建数据目录 %s 失败（请改用 -data 指定一个可写目录）: %w", abs, err)
+		}
+		log.Printf("数据目录不存在，已创建：%s", abs)
+	} else {
+		return nil, fmt.Errorf("检查数据目录 %s 失败: %w", abs, statErr)
 	}
+
 	r := &Registry{dir: abs, path: filepath.Join(abs, settingsFile)}
 
 	data, err := os.ReadFile(r.path)
 	switch {
 	case err == nil:
-		if err := json.Unmarshal(data, &r.settings); err != nil {
-			return nil, fmt.Errorf("解析 %s 失败（请修复或删除该文件）: %w", r.path, err)
+		data = stripBOM(data)
+		trimmed := bytes.TrimSpace(data)
+		if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+			// An empty settings.json (a crashed write, or a file created by
+			// hand) carries no configuration; treat it like a fresh install.
+			log.Printf("%s 为空，按首次启动处理", r.path)
+			if err := r.initialise(legacyFile); err != nil {
+				return nil, err
+			}
+			break
+		}
+		if err := json.Unmarshal(trimmed, &r.settings); err != nil {
+			return nil, fmt.Errorf("解析 %s 失败（请修复，或删除后重启以创建默认配置）: %w", r.path, err)
 		}
 		if err := r.validate(); err != nil {
 			return nil, fmt.Errorf("%s 无效: %w", r.path, err)
@@ -112,7 +142,7 @@ func Open(dir, legacyFile string) (*Registry, error) {
 			return nil, err
 		}
 	default:
-		return nil, err
+		return nil, fmt.Errorf("读取 %s 失败: %w", r.path, err)
 	}
 
 	if err := r.activateInitial(); err != nil {
@@ -121,17 +151,42 @@ func Open(dir, legacyFile string) (*Registry, error) {
 	return r, nil
 }
 
+// stripBOM removes a UTF-8 byte-order mark. Windows editors (notably older
+// Notepad) add one by default, and encoding/json rejects it as an invalid
+// character at the start of the document.
+func stripBOM(data []byte) []byte {
+	return bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+}
+
 // DataDir returns the directory that holds settings.json and the workspace
 // files. Used for startup logging.
 func (r *Registry) DataDir() string { return r.dir }
 
-// initialise creates settings.json for a fresh data directory, adopting an
-// existing projects.json as the default workspace.
+// initialise creates the default configuration for a fresh data directory: an
+// empty workspace file plus settings.json pointing at it. An existing legacy
+// projects.json is adopted untouched.
 func (r *Registry) initialise(legacyFile string) error {
 	file := defaultFileName
 	if legacyFile != "" {
 		file = filepath.Base(legacyFile)
 	}
+
+	p, err := r.absPath(file)
+	if err != nil {
+		return err
+	}
+	if _, statErr := os.Stat(p); os.IsNotExist(statErr) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return fmt.Errorf("创建默认工作空间目录失败: %w", err)
+		}
+		if err := os.WriteFile(p, []byte("[]\n"), 0o644); err != nil {
+			return fmt.Errorf("创建默认工作空间文件 %s 失败: %w", p, err)
+		}
+		log.Printf("工作空间文件不存在，已创建空文件：%s", p)
+	} else if statErr != nil {
+		return fmt.Errorf("检查工作空间文件 %s 失败: %w", p, statErr)
+	}
+
 	id := store.NewID()
 	r.settings = settings{
 		Version:    settingsVersion,
@@ -139,9 +194,9 @@ func (r *Registry) initialise(legacyFile string) error {
 		Workspaces: []entry{{ID: id, Name: defaultName, File: file}},
 	}
 	if err := r.saveSettings(r.settings); err != nil {
-		return err
+		return fmt.Errorf("创建默认配置 %s 失败: %w", r.path, err)
 	}
-	log.Printf("已创建 %s（工作空间「%s」→ %s）", r.path, defaultName, file)
+	log.Printf("未找到 %s，已创建默认配置（工作空间「%s」→ %s）", r.path, defaultName, file)
 	return nil
 }
 

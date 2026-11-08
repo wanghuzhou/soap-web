@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -38,6 +39,99 @@ func readSettings(t *testing.T, dir string) settings {
 		t.Fatalf("decode settings: %v", err)
 	}
 	return s
+}
+
+// TestOpenCreatesMissingDataDir is the fresh-install path: neither the data
+// directory nor settings.json exists, and both must be created before serving.
+func TestOpenCreatesMissingDataDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested", "data")
+
+	reg, err := Open(dir, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := reg.CurrentInfo().Name; got != defaultName {
+		t.Errorf("current name = %q, want %q", got, defaultName)
+	}
+	if _, err := os.Stat(filepath.Join(dir, settingsFile)); err != nil {
+		t.Errorf("settings.json was not created: %v", err)
+	}
+	// A fresh install should also leave an inspectable, empty workspace file
+	// rather than a settings entry pointing at a file that does not exist.
+	data, err := os.ReadFile(filepath.Join(dir, defaultFileName))
+	if err != nil {
+		t.Fatalf("projects.json was not created: %v", err)
+	}
+	if strings.TrimSpace(string(data)) != "[]" {
+		t.Errorf("default workspace file = %q, want []", string(data))
+	}
+	if st, _ := reg.Active(); st == nil {
+		t.Error("Active store is nil")
+	}
+}
+
+// TestOpenTreatsEmptySettingsAsFresh covers a settings.json left empty by a
+// crashed write or created by hand. It carries no configuration, so the app
+// must start with a default instead of refusing to boot.
+func TestOpenTreatsEmptySettingsAsFresh(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, settingsFile), []byte("  \n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := Open(dir, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := reg.CurrentInfo().Name; got != defaultName {
+		t.Errorf("current name = %q, want %q", got, defaultName)
+	}
+	s := readSettings(t, dir)
+	if len(s.Workspaces) != 1 || s.Workspaces[0].Name != defaultName {
+		t.Errorf("settings after recovery = %+v", s)
+	}
+}
+
+// TestOpenStripsBOM accepts a settings.json saved by an editor that prepends a
+// UTF-8 BOM (older Notepad does this by default).
+func TestOpenStripsBOM(t *testing.T) {
+	dir := t.TempDir()
+	body := append([]byte{0xEF, 0xBB, 0xBF},
+		[]byte(`{"version":1,"current":"a","workspaces":[{"id":"a","name":"带 BOM","file":"projects.json"}]}`)...)
+	if err := os.WriteFile(filepath.Join(dir, settingsFile), body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	reg, err := Open(dir, "")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if got := reg.CurrentInfo().Name; got != "带 BOM" {
+		t.Errorf("current name = %q", got)
+	}
+}
+
+// TestOpenCorruptSettingsNotOverwritten makes sure the "create a default"
+// behaviour stops at empty files: a settings.json with real but broken content
+// is a user problem, and silently replacing it would lose the workspace map.
+func TestOpenCorruptSettingsNotOverwritten(t *testing.T) {
+	dir := t.TempDir()
+	bad := []byte("{not json")
+	path := filepath.Join(dir, settingsFile)
+	if err := os.WriteFile(path, bad, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Open(dir, ""); err == nil {
+		t.Fatal("Open should reject a corrupt settings.json")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(bad) {
+		t.Errorf("corrupt settings.json was modified: %q", string(got))
+	}
 }
 
 // TestOpenMigratesLegacyProjects covers the upgrade path: an existing

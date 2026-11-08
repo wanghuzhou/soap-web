@@ -20,6 +20,7 @@
 package store
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -55,7 +56,11 @@ func New(path string) (*Store, error) {
 		}
 		return nil, err
 	}
-	if len(data) > 0 {
+	// Strip a UTF-8 BOM before decoding: Windows editors (notably older
+	// Notepad) add one by default, and encoding/json rejects it as an invalid
+	// character at the start of the document.
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+	if len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, &s.projects); err != nil {
 			return nil, err
 		}

@@ -155,7 +155,9 @@ data/
 ```
 
 - 每个工作空间文件就是一个 `Project[]` 数组，格式与旧版 `projects.json` 完全相同，可直接拷贝复用。
+- 数据目录或 `settings.json` 不存在时会自动创建（含一个空的 `projects.json`）；`settings.json` 为空时按首次启动处理，不会因为文件缺失而启动失败。
 - 首次启动若没有 `settings.json`，会把已有的 `projects.json` 自动登记为「默认」工作空间，不移动、不改名文件。
+- `settings.json` / 工作空间文件开头的 UTF-8 BOM 会被忽略（Windows 记事本另存为 UTF-8 时常见）。
 - 写入采用临时文件 + 原子 rename，避免崩溃导致文件损坏。切换工作空间时先加载并校验目标文件，失败则保持当前空间与 `settings.json` 不变。
 - `settings.json` 本身损坏（JSON 语法错误、路径越界、重名等）时程序会拒绝启动并在控制台指出文件；单个工作空间文件损坏时只在切换到它时报错，当前空间不受影响。
 - 删除工作空间不会直接删文件，而是移到 `data/trash/<id>-<时间>.json`；最后一个工作空间不允许删除。需要恢复时，把备份文件移回 `data/workspaces/` 并在 `settings.json` 里补回一条映射即可。
