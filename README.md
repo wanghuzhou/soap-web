@@ -156,6 +156,7 @@ data/
 
 - 每个工作空间文件就是一个 `Project[]` 数组，格式与旧版 `projects.json` 完全相同，可直接拷贝复用。
 - 数据目录或 `settings.json` 不存在时会自动创建（含一个空的 `projects.json`）；`settings.json` 为空时按首次启动处理，不会因为文件缺失而启动失败。
+- 默认数据目录不可写时（例如 exe 放在 `Program Files` 或只读目录），会自动改用用户数据目录：Windows 为 `%LOCALAPPDATA%\soap-web\data`，其他系统为 `os.UserConfigDir()/soap-web/data`。显式 `-data` 指定的目录不会回退，失败时会直接报错。
 - 首次启动若没有 `settings.json`，会把已有的 `projects.json` 自动登记为「默认」工作空间，不移动、不改名文件。
 - `settings.json` / 工作空间文件开头的 UTF-8 BOM 会被忽略（Windows 记事本另存为 UTF-8 时常见）。
 - 写入采用临时文件 + 原子 rename，避免崩溃导致文件损坏。切换工作空间时先加载并校验目标文件，失败则保持当前空间与 `settings.json` 不变。

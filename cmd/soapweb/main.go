@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -29,8 +31,11 @@ func main() {
 
 	// Resolve the data directory. Default to a data/ dir next to the executable
 	// so settings and workspaces persist regardless of the working directory.
+	// When that location is not writable (for example the exe sits in a
+	// read-only folder), fall back to a per-user directory instead of refusing
+	// to start. An explicit -data path never falls back: the user asked for it.
 	dir, legacy := resolveDataDir(*dataPath)
-	reg, err := workspace.Open(dir, legacy)
+	reg, err := openRegistry(dir, legacy, *dataPath == "")
 	if err != nil {
 		log.Printf("加载数据目录失败 %s：%v", dir, err)
 		os.Exit(1)
@@ -96,6 +101,70 @@ func resolveDataDir(raw string) (dir, legacy string) {
 		return filepath.Dir(raw), filepath.Base(raw)
 	}
 	return raw, ""
+}
+
+// openRegistry opens the data directory, falling back to a per-user location
+// when the default (next to the executable) is not writable.
+//
+// Only permission errors trigger the fallback: a corrupt settings.json must
+// keep failing loudly instead of silently starting on a fresh, empty data set.
+// An explicit -data path never falls back — the user named that exact directory.
+func openRegistry(dir, legacy string, allowFallback bool) (*workspace.Registry, error) {
+	reg, err := workspace.Open(dir, legacy)
+	if err == nil {
+		return reg, nil
+	}
+	if !allowFallback || !errors.Is(err, os.ErrPermission) {
+		return nil, err
+	}
+
+	fallback, ferr := userDataDir()
+	if ferr != nil {
+		return nil, err
+	}
+	if samePath(fallback, dir) {
+		return nil, err
+	}
+
+	log.Printf("默认数据目录不可写：%s", dir)
+	log.Printf("改用用户数据目录：%s（可用 -data 指定其他目录）", fallback)
+	reg, ferr = workspace.Open(fallback, "")
+	if ferr != nil {
+		return nil, fmt.Errorf("默认数据目录不可写（%v），用户数据目录 %s 也不可用: %w", err, fallback, ferr)
+	}
+	return reg, nil
+}
+
+// userDataDir returns a per-user writable location for settings and workspaces.
+func userDataDir() (string, error) {
+	if runtime.GOOS == "windows" {
+		if base := os.Getenv("LOCALAPPDATA"); base != "" {
+			return filepath.Join(base, "soap-web", "data"), nil
+		}
+	}
+	if base, err := os.UserConfigDir(); err == nil {
+		return filepath.Join(base, "soap-web", "data"), nil
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".soap-web", "data"), nil
+	}
+	return "", errors.New("无法确定用户数据目录")
+}
+
+// samePath reports whether two paths point at the same directory, tolerating
+// Windows' case-insensitive filesystem.
+func samePath(a, b string) bool {
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	if errA != nil || errB != nil {
+		return a == b
+	}
+	aa = filepath.Clean(aa)
+	bb = filepath.Clean(bb)
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(aa, bb)
+	}
+	return aa == bb
 }
 
 // openBrowser opens the given URL in the platform's default browser.

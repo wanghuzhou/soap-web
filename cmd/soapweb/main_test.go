@@ -45,3 +45,43 @@ func TestResolveDataDir(t *testing.T) {
 		t.Errorf("default = (%q, %q)", gotDir, gotLegacy)
 	}
 }
+
+// TestUserDataDir checks the fallback location is a per-user soap-web path.
+func TestUserDataDir(t *testing.T) {
+	dir, err := userDataDir()
+	if err != nil {
+		t.Fatalf("userDataDir: %v", err)
+	}
+	slash := filepath.ToSlash(dir)
+	if !strings.HasSuffix(slash, "soap-web/data") {
+		t.Errorf("userDataDir = %q, want a .../soap-web/data path", dir)
+	}
+}
+
+// TestSamePath covers the comparison used to avoid "falling back" to the same
+// directory (and to handle Windows case-insensitive paths).
+func TestSamePath(t *testing.T) {
+	dir := t.TempDir()
+	if !samePath(dir, dir) {
+		t.Errorf("samePath(%q, %q) = false", dir, dir)
+	}
+	if !samePath(dir, filepath.Join(dir, ".")) {
+		t.Errorf("samePath should ignore a trailing dot component")
+	}
+	if samePath(dir, filepath.Join(dir, "sub")) {
+		t.Errorf("samePath should distinguish different directories")
+	}
+}
+
+// TestOpenRegistryKeepsCorruptSettingsError: the fallback is only for permission
+// problems. A corrupt settings.json must keep failing loudly instead of
+// silently starting on an empty data set.
+func TestOpenRegistryKeepsCorruptSettingsError(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openRegistry(dir, "", true); err == nil {
+		t.Fatal("openRegistry should return the parse error")
+	}
+}

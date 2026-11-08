@@ -115,6 +115,16 @@ func Open(dir, legacyFile string) (*Registry, error) {
 		return nil, fmt.Errorf("检查数据目录 %s 失败: %w", abs, statErr)
 	}
 
+	// A directory that exists but is not writable would let the app start and
+	// then fail on the first save. Probe it now so main can fall back or report
+	// a precise error before serving anything.
+	probe, probeErr := os.CreateTemp(abs, ".soapweb-write-*")
+	if probeErr != nil {
+		return nil, fmt.Errorf("数据目录 %s 不可写（请改用 -data 指定一个可写目录）: %w", abs, probeErr)
+	}
+	_ = probe.Close()
+	_ = os.Remove(probe.Name())
+
 	r := &Registry{dir: abs, path: filepath.Join(abs, settingsFile)}
 
 	data, err := os.ReadFile(r.path)
