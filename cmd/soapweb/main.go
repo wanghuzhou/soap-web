@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"soapweb/internal/api"
+	"soapweb/internal/applog"
 	"soapweb/internal/workspace"
 	"soapweb/web"
 )
@@ -35,6 +36,11 @@ func main() {
 	// read-only folder), fall back to a per-user directory instead of refusing
 	// to start. An explicit -data path never falls back: the user asked for it.
 	dir, legacy := resolveDataDir(*dataPath)
+	if path, err := applog.Init(logDir(dir)); err != nil {
+		log.Printf("日志文件不可用，仅输出到控制台：%v", err)
+	} else {
+		log.Printf("日志文件：%s", path)
+	}
 	reg, err := openRegistry(dir, legacy, *dataPath == "")
 	if err != nil {
 		log.Printf("加载数据目录失败 %s：%v", dir, err)
@@ -71,6 +77,11 @@ func main() {
 		log.Printf("server error: %v", err)
 		os.Exit(1)
 	}
+}
+
+// logDir returns the log directory that sits next to the data directory.
+func logDir(dataDir string) string {
+	return filepath.Join(filepath.Dir(dataDir), applog.DirName)
 }
 
 // resolveDataDir turns -data into a data directory plus an optional legacy

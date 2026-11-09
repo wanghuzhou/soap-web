@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"strings"
@@ -49,7 +50,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	s.registerProjectRoutes(apiMux)
 	s.registerWorkspaceRoutes(apiMux)
 
-	mux.Handle("/api/", s.withWorkspace(apiMux))
+	mux.Handle("/api/", withLogging(s.withWorkspace(apiMux)))
 	mux.Handle("/", staticHandler(s.StaticFS))
 }
 
@@ -78,6 +79,8 @@ func (s *Server) withWorkspace(next http.Handler) http.Handler {
 		// workspace API is how it recovers.
 		if !workspaceExempt(r) {
 			if want := r.Header.Get(workspaceHeader); want != "" && want != info.ID {
+				log.Printf("拒绝过期标签页的请求：%s %s（标签页工作空间 %s，当前 %s）",
+					r.Method, r.URL.Path, want, info.ID)
 				writeJSON(w, http.StatusConflict, map[string]any{
 					"error":     "工作空间已在其他窗口切换，请先同步后再操作",
 					"code":      "workspace_mismatch",
@@ -210,6 +213,13 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
+	// Every client-visible failure also lands in the log file: the browser only
+	// shows the message, the file keeps it next to what led there.
+	level := "警告"
+	if status >= http.StatusInternalServerError {
+		level = "错误"
+	}
+	log.Printf("[%s] %s", level, msg)
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
@@ -250,7 +260,13 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 			proxyCfg = p.Proxy
 		}
 	}
-	writeJSON(w, http.StatusOK, transport.Send(req, proxyCfg))
+	resp := transport.Send(req, proxyCfg)
+	if resp.Error != "" {
+		// Returned as 200 with an error field, so this log line is the only
+		// place a failed call is recorded.
+		log.Printf("[错误] 发送请求失败：%s %s：%s", req.Method, req.URL, resp.Error)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleImportSoapUI parses an uploaded SoapUI project and persists it.

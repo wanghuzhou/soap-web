@@ -46,6 +46,14 @@ func TestResolveDataDir(t *testing.T) {
 	}
 }
 
+// TestLogDir keeps the log directory a sibling of the data directory.
+func TestLogDir(t *testing.T) {
+	base := t.TempDir()
+	if got, want := logDir(filepath.Join(base, "data")), filepath.Join(base, "logs"); got != want {
+		t.Errorf("logDir = %q, want %q", got, want)
+	}
+}
+
 // TestUserDataDir checks the fallback location is a per-user soap-web path.
 func TestUserDataDir(t *testing.T) {
 	dir, err := userDataDir()
