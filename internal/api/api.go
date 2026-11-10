@@ -198,9 +198,9 @@ func clampTimeout(ms int) int {
 
 // handleImportSoapUI parses an uploaded SoapUI project and persists it.
 func (s *Server) handleImportSoapUI(w http.ResponseWriter, r *http.Request) {
-	data, name, err := readUpload(r)
+	data, name, err := readUpload(w, r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeUploadErr(w, err)
 		return
 	}
 	project, err := soapuiproj.Parse(data)

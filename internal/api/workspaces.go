@@ -117,9 +117,9 @@ func (s *Server) handleExportWorkspace(w http.ResponseWriter, r *http.Request) {
 // workspace from it. The optional name query parameter defaults to the upload
 // filename.
 func (s *Server) handleImportWorkspace(w http.ResponseWriter, r *http.Request) {
-	data, filename, err := readUpload(r)
+	data, filename, err := readUpload(w, r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, "读取文件失败: "+err.Error())
+		writeUploadErr(w, err)
 		return
 	}
 	var projects []model.Project

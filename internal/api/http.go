@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -131,14 +132,29 @@ func isJSONRequest(r *http.Request) bool {
 }
 
 // maxUploadBytes caps an uploaded project or WSDL document.
-const maxUploadBytes = 32 << 20
+const maxUploadBytes int64 = 32 << 20
+
+// maxMultipartMemory is how much of a multipart upload is buffered in RAM; the
+// rest spills to temporary files, still bounded by maxUploadBytes.
+const maxMultipartMemory = 8 << 20
 
 // readUpload extracts the raw bytes from a multipart "file" field, or from the
 // request body directly. The returned name is the uploaded filename if any.
-func readUpload(r *http.Request) ([]byte, string, error) {
+func readUpload(w http.ResponseWriter, r *http.Request) ([]byte, string, error) {
+	return readUploadLimited(w, r, maxUploadBytes)
+}
+
+// readUploadLimited is readUpload with an explicit byte limit. The body is
+// wrapped in http.MaxBytesReader so the limit is a hard cap: an oversized
+// upload fails with *http.MaxBytesError instead of being silently truncated
+// (a raw io.LimitReader) or written to disk in full (ParseMultipartForm's
+// argument is only the in-memory threshold).
+func readUploadLimited(w http.ResponseWriter, r *http.Request, limit int64) ([]byte, string, error) {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+
 	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if mediaType == "multipart/form-data" {
-		if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
+		if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
 			return nil, "", err
 		}
 		file, header, err := r.FormFile("file")
@@ -149,8 +165,20 @@ func readUpload(r *http.Request) ([]byte, string, error) {
 		data, err := io.ReadAll(file)
 		return data, header.Filename, err
 	}
-	data, err := io.ReadAll(io.LimitReader(r.Body, maxUploadBytes))
+	data, err := io.ReadAll(r.Body)
 	return data, "", err
+}
+
+// writeUploadErr maps an upload failure to a response: exceeding the hard limit
+// is a deliberate client limit (413), anything else is a read/parse problem.
+func writeUploadErr(w http.ResponseWriter, err error) {
+	var tooLarge *http.MaxBytesError
+	if errors.As(err, &tooLarge) {
+		writeErr(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("文件超过 %d MB 上限", maxUploadBytes>>20))
+		return
+	}
+	writeErr(w, http.StatusBadRequest, err.Error())
 }
 
 // mapStoreErr converts store errors into appropriate HTTP responses.

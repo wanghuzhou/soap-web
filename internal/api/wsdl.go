@@ -22,9 +22,9 @@ func (s *Server) handleParseWSDL(w http.ResponseWriter, r *http.Request) {
 		s.handleFetchWSDL(w, r)
 		return
 	}
-	data, name, err := readUpload(r)
+	data, name, err := readUpload(w, r)
 	if err != nil {
-		writeErr(w, http.StatusBadRequest, err.Error())
+		writeUploadErr(w, err)
 		return
 	}
 	service, err := wsdl.Parse(data)

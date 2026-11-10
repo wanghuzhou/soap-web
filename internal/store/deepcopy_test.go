@@ -187,3 +187,63 @@ func TestListEmptyStore(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound", err)
 	}
 }
+
+// TestCallHeadersAreNotShared guards AddCall/UpdateCall: both used to store the
+// caller's Call value directly, so mutating its Headers slice afterwards
+// changed the store without going through a write. The package promises deep
+// copies in both directions.
+func TestCallHeadersAreNotShared(t *testing.T) {
+	s, err := New(filepath.Join(t.TempDir(), "p.json"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	p, err := s.AddProject(model.Project{Name: "P"})
+	if err != nil {
+		t.Fatalf("AddProject: %v", err)
+	}
+	svc, err := s.AddService(p.ID, model.Service{Name: "S"})
+	if err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	op, err := s.AddOperation(p.ID, svc.ID, model.Operation{Name: "O"})
+	if err != nil {
+		t.Fatalf("AddOperation: %v", err)
+	}
+
+	added, err := s.AddCall(p.ID, svc.ID, op.ID, model.Call{
+		Title:   "c",
+		Headers: []model.Header{{Name: "X-Token", Value: "original"}},
+	})
+	if err != nil {
+		t.Fatalf("AddCall: %v", err)
+	}
+	added.Headers[0].Value = "mutated-add"
+	if got := storedHeaders(t, s, p.ID); got[0].Value != "original" {
+		t.Fatalf("AddCall shares the caller's header slice: %q", got[0].Value)
+	}
+
+	// Update path: the value read back is itself a copy; mutating the struct we
+	// pass to UpdateCall must not affect the stored sample afterwards.
+	updated, err := s.Get(p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	call := updated.Services[0].Operations[0].Calls[0]
+	call.Headers = []model.Header{{Name: "X-Token", Value: "updated"}}
+	if err := s.UpdateCall(p.ID, svc.ID, op.ID, call); err != nil {
+		t.Fatalf("UpdateCall: %v", err)
+	}
+	call.Headers[0].Value = "mutated-update"
+	if got := storedHeaders(t, s, p.ID); got[0].Value != "updated" {
+		t.Fatalf("UpdateCall shares the caller's header slice: %q", got[0].Value)
+	}
+}
+
+func storedHeaders(t *testing.T, s *Store, projectID string) []model.Header {
+	t.Helper()
+	got, err := s.Get(projectID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	return got.Services[0].Operations[0].Calls[0].Headers
+}

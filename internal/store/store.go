@@ -310,6 +310,10 @@ func (s *Store) UpdateProject(p model.Project) error {
 	if err := p.Proxy.Validate(); err != nil {
 		return err
 	}
+	// A full replace must leave the same invariant as AddProject: every node
+	// reachable by id. Without this a client that omits an id silently persists
+	// a node that no CRUD route can address afterwards.
+	EnsureIDs(&p)
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		i := indexOfProject(list, p.ID)
 		if i < 0 {
@@ -449,7 +453,10 @@ func (s *Store) AddCall(projectID, serviceID, opID string, call model.Call) (mod
 		if call.Action == "" {
 			call.Action = op.SoapAction
 		}
-		op.Calls = append(op.Calls, call)
+		// cloneCall: the caller keeps ownership of the value it passed in. The
+		// package promises that no mutable state is shared with callers, and
+		// Headers is a slice.
+		op.Calls = append(op.Calls, cloneCall(call))
 		return list, nil
 	})
 	return call, err
@@ -465,7 +472,7 @@ func (s *Store) UpdateCall(projectID, serviceID, opID string, call model.Call) e
 		op := &list[pi].Services[si].Operations[oi]
 		for ci := range op.Calls {
 			if op.Calls[ci].ID == call.ID {
-				op.Calls[ci] = call
+				op.Calls[ci] = cloneCall(call)
 				return list, nil
 			}
 		}

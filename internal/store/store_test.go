@@ -267,3 +267,36 @@ func TestNewAcceptsUTF8BOM(t *testing.T) {
 		t.Fatalf("projects = %+v", list)
 	}
 }
+
+// TestUpdateProjectAssignsMissingIDs keeps UpdateProject consistent with
+// AddProject: a full replace built by hand must still leave every node with an
+// id, otherwise the node is persisted but no CRUD route can address it.
+func TestUpdateProjectAssignsMissingIDs(t *testing.T) {
+	s, _ := newTestStore(t)
+	p, err := s.AddProject(model.Project{Name: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p.Services = []model.Service{{
+		Name: "svc",
+		Operations: []model.Operation{{
+			Name:  "op",
+			Calls: []model.Call{{Title: "c", Request: "<a/>"}},
+		}},
+	}}
+	if err := s.UpdateProject(p); err != nil {
+		t.Fatalf("UpdateProject: %v", err)
+	}
+
+	got, err := s.Get(p.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	svc := got.Services[0]
+	op := svc.Operations[0]
+	call := op.Calls[0]
+	if svc.ID == "" || op.ID == "" || call.ID == "" {
+		t.Fatalf("missing ids after UpdateProject: svc=%q op=%q call=%q", svc.ID, op.ID, call.ID)
+	}
+}
