@@ -132,6 +132,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 }
 
 // handleSend executes a raw HTTP/SOAP call.
+//
+// Headers are not merged here: the frontend sends exactly what the user sees
+// (project defaults overlaid by the sample's overrides), so what was sent is
+// what the UI showed. The server only validates and clamps.
 func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	req, ok := decodeJSON[model.SendRequest](w, r)
 	if !ok {
@@ -141,6 +145,13 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "缺少 url")
 		return
 	}
+	headers := headersFromMap(req.Headers)
+	if err := model.ValidateHeaders(headers); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	req.TimeoutMS = clampTimeout(req.TimeoutMS)
+
 	// Resolve the project's proxy settings (if the request belongs to a project).
 	var proxyCfg *model.ProxySettings
 	if req.ProjectID != "" {
@@ -155,6 +166,34 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[错误] 发送请求失败：%s %s：%s", req.Method, req.URL, resp.Error)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// headersFromMap flattens the request's header map for validation.
+func headersFromMap(m map[string]string) []model.Header {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]model.Header, 0, len(m))
+	for k, v := range m {
+		out = append(out, model.Header{Name: k, Value: v})
+	}
+	return out
+}
+
+// clampTimeout keeps a client-supplied timeout inside the allowed range instead
+// of rejecting it: an out-of-range value is a UI mistake, not a reason to
+// refuse to send.
+func clampTimeout(ms int) int {
+	if ms <= 0 {
+		return model.DefaultTimeoutMS
+	}
+	if ms < model.MinTimeoutMS {
+		return model.MinTimeoutMS
+	}
+	if ms > model.MaxTimeoutMS {
+		return model.MaxTimeoutMS
+	}
+	return ms
 }
 
 // handleImportSoapUI parses an uploaded SoapUI project and persists it.

@@ -205,6 +205,19 @@ const TREE_ACTIONS = {
     beginRename('call', { pid: data.pid, sid: data.sid, oid: data.oid, cid: data.cid });
   },
 
+  // Duplicate keeps the payload, headers and timeout, so a variant only needs
+  // the fields that differ edited.
+  'duplicate-call': async (data) => {
+    const url = projectPath(data.pid, 'services', data.sid, 'operations', data.oid, 'calls', data.cid, 'duplicate');
+    const copied = await apiJSON('POST', url);
+    if (isCollapsed(data.oid)) toggleCollapsed(data.oid);
+    await hooks.reload();
+    const ids = { pid: data.pid, sid: data.sid, oid: data.oid, cid: copied.id };
+    const found = findCall(ids);
+    if (found) hooks.onSelect(found.call, 'call', { ids, parentOp: found.operation });
+    toast('已复制请求样例');
+  },
+
   'proxy-proj': (data) => {
     openProxyDialog(data.pid);
   },

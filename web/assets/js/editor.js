@@ -1,15 +1,18 @@
 // Request editor: transport fields, highlighted textarea, send/save/delete.
 
 import { $ } from './dom.js';
-import { state } from './state.js';
+import { state, findProject } from './state.js';
 import { apiJSON, apiSend, callPath } from './api.js';
 import { toast } from './toast.js';
 import { prettyXML, minifyXML, normalizeNewlines } from './xml.js';
 import { syncSelection, deleteNode } from './tree.js';
-import { STORAGE_KEY } from './constants.js';
+import { STORAGE_KEY, TIMEOUT, isSensitiveName } from './constants.js';
 import { isRenaming } from './inlineedit.js';
 import { renderResponse } from './response.js';
 import { initTextarea, renderHighlight } from './editor/textarea.js';
+import { initHeaders, loadHeaders, clearHeaders, collectHeaders, headersForSend, isHeadersDirty } from './headers.js';
+import { buildCurl, sensitiveNames } from './curl.js';
+import { copyText } from './clipboard.js';
 
 let reloadHandler = async () => {};
 
@@ -24,9 +27,7 @@ let loadedSnapshot = '';
 // saving guards the write paths so a double-click cannot fire two PUTs.
 let saving = false;
 
-// SEND_TIMEOUT_MS is the client-side request timeout. The server enforces its
-// own copy; this bound just keeps the UI from waiting forever.
-const SEND_TIMEOUT_MS = 60_000;
+// Sending state is described where it is declared below.
 
 export function initEditor({ reload }) {
   reloadHandler = reload || reloadHandler;
@@ -36,9 +37,14 @@ export function initEditor({ reload }) {
   $('btnSend').addEventListener('click', send);
   $('btnSaveCall').addEventListener('click', saveCurrentCall);
   $('btnDeleteNode').addEventListener('click', deleteCurrentNode);
+  $('btnCopyCurl').addEventListener('click', copyAsCurl);
   $('contentType').addEventListener('change', updateReqBadge);
 
   initTextarea();
+  initHeaders({ onDirty: updateEditButtons });
+  $('timeoutMs').addEventListener('input', updateEditButtons);
+  // The curl button follows the Endpoint: it is usable as soon as one is typed.
+  $('endpoint').addEventListener('input', updateEditButtons);
 
   document.addEventListener('keydown', (event) => {
     // Any open modal captures global shortcuts: Ctrl+Enter inside the WSDL URL
@@ -93,18 +99,35 @@ function setRequestBody(value, doFormat) {
   renderHighlight();
 }
 
-// isDirty reports whether the editor holds changes not yet saved.
+// isDirty reports whether the editor holds changes not yet saved. Headers and
+// the timeout are part of the sample too, so leaving them out would let a
+// workspace switch discard them without warning.
 export function isDirty() {
   const textarea = $('requestBody');
-  return !!textarea && textarea.value !== loadedSnapshot;
+  if (textarea && textarea.value !== loadedSnapshot) return true;
+  const selected = state.selected;
+  if (!selected || selected.kind !== 'call') return false;
+  if (isHeadersDirty(selected.node && selected.node.headers)) return true;
+  const timeoutInput = $('timeoutMs');
+  const savedTimeout = (selected.node && selected.node.timeoutMs) || 0;
+  const currentTimeout = timeoutInput && timeoutInput.value.trim() ? Number(timeoutInput.value) : 0;
+  return currentTimeout !== savedTimeout;
 }
 
 // markSaved makes the current editor content the saved baseline. Without it,
 // isDirty() stays true after a successful save and the workspace switcher keeps
 // warning about "unsaved changes".
-function markSaved() {
+//
+// The selected node is updated too: isDirty compares the header draft and the
+// timeout against it, and reload() re-reads the project from the server, so the
+// node must already reflect what was just written.
+function markSaved(body) {
   const textarea = $('requestBody');
   loadedSnapshot = textarea ? textarea.value : '';
+  const selected = state.selected;
+  if (selected && selected.kind === 'call' && body) {
+    selected.node = { ...selected.node, ...body };
+  }
 }
 
 // isSending reports whether a request is currently in flight.
@@ -165,6 +188,10 @@ export function loadNode(node, kind, path = {}) {
     // discovered the "+请求" button; the data was there all along.
     $('endpoint').value = kind === 'op' ? (node.endpoint || '') : '';
     $('soapAction').value = kind === 'op' ? (node.soapAction || '') : '';
+    // Only a request sample can carry header overrides; an operation previews
+    // the project defaults it would inherit.
+    loadHeaders(projectHeadersOf(state.selected), null);
+    setTimeoutInput(null);
     setRequestBody(kind === 'op' ? (node.template || node.request || '') : '', false);
     updateReqBadge();
     updateEditButtons();
@@ -181,11 +208,43 @@ export function loadNode(node, kind, path = {}) {
   $('reqTitle').textContent = title;
   $('endpoint').value = node.endpoint || (parentOperation && parentOperation.endpoint) || '';
   $('soapAction').value = node.action || node.soapAction || (parentOperation && parentOperation.soapAction) || '';
+  loadHeaders(projectHeadersOf(state.selected), node.headers);
+  setTimeoutInput(node.timeoutMs);
   const autoFormat = $('autoFormat') ? $('autoFormat').checked : false;
   setRequestBody(node.request || '', autoFormat);
   updateReqBadge();
   updateEditButtons();
   syncSelection();
+}
+
+// projectHeadersOf returns the headers of the project owning the selection.
+function projectHeadersOf(selected) {
+  const project = selected && findProject(selected.ids && selected.ids.pid);
+  return (project && project.headers) || null;
+}
+
+// setTimeoutInput shows a sample's timeout, or the default as a placeholder so
+// an unset value reads as "60 s" rather than as an empty box.
+function setTimeoutInput(ms) {
+  const input = $('timeoutMs');
+  if (!input) return;
+  input.value = ms ? String(ms) : '';
+  input.placeholder = String(TIMEOUT.DEFAULT);
+}
+
+// readTimeout validates the timeout field. It returns the default when the box
+// is empty, and null (after telling the user) when the content is unusable.
+function readTimeout() {
+  const input = $('timeoutMs');
+  if (!input) return TIMEOUT.DEFAULT;
+  const raw = input.value.trim();
+  if (raw === '') return TIMEOUT.DEFAULT;
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value < TIMEOUT.MIN || value > TIMEOUT.MAX) {
+    toast(`超时需在 ${TIMEOUT.MIN / 1000} 到 ${TIMEOUT.MAX / 1000} 秒之间`, true);
+    return null;
+  }
+  return Math.round(value);
 }
 
 export function updateEditButtons() {
@@ -194,6 +253,10 @@ export function updateEditButtons() {
   const canDelete = !!selected && (selected.kind === 'call' || selected.kind === 'op' || selected.kind === 'svc');
   $('btnSaveCall').disabled = !isCall || saving;
   $('btnDeleteNode').disabled = !canDelete || saving;
+  // Copying as curl needs neither a saved sample nor a selection: only the
+  // Endpoint, which is what the command addresses.
+  const endpointInput = $('endpoint');
+  $('btnCopyCurl').disabled = !(endpointInput && endpointInput.value.trim());
   // While a request is in flight the button becomes a Cancel action, so it
   // stays enabled but its label and handler change (see send()).
   const btnSend = $('btnSend');
@@ -230,6 +293,8 @@ export function resetEditor() {
   if (action) action.value = '';
   const body = $('requestBody');
   if (body) body.value = '';
+  clearHeaders();
+  setTimeoutInput(null);
   const info = $('sendInfo');
   if (info) info.textContent = '';
   renderHighlight();
@@ -270,16 +335,14 @@ async function send() {
     return;
   }
 
+  const timeout = readTimeout();
+  if (timeout == null) return;
+
+  // The user's own headers go in first so the SOAP fields below still win:
+  // Content-Type and SOAPAction are driven by the two controls above, and a
+  // stale custom value would silently break the request.
+  const headers = requestHeaders();
   const contentType = $('contentType').value;
-  const headers = {};
-  const action = $('soapAction').value.trim();
-  if (action) {
-    if (contentType.startsWith('application/soap+xml')) {
-      headers['Content-Type'] = contentType + '; action="' + action.replace(/"/g, '') + '"';
-    } else {
-      headers['SOAPAction'] = '"' + action.replace(/"/g, '') + '"';
-    }
-  }
 
   const payload = {
     projectId: (state.selected.ids && state.selected.ids.pid) || '',
@@ -288,7 +351,7 @@ async function send() {
     contentType,
     headers,
     body: $('requestBody').value,
-    timeoutMs: SEND_TIMEOUT_MS,
+    timeoutMs: timeout,
   };
 
   const info = $('sendInfo');
@@ -345,19 +408,23 @@ async function saveCurrentCall() {
     return;
   }
   if (saving) return;
+  const timeout = readTimeout();
+  if (timeout == null) return;
   const body = {
     id: selected.ids.cid,
     title: selected.node.title || '请求',
     endpoint: $('endpoint').value.trim(),
     action: $('soapAction').value.trim(),
     request: $('requestBody').value,
+    headers: collectHeaders(),
+    timeoutMs: timeout === TIMEOUT.DEFAULT ? 0 : timeout,
   };
   saving = true;
   updateEditButtons();
   try {
     await apiJSON('PUT', callPath(selected.ids), body);
     // The write succeeded: the editor content is now the saved baseline.
-    markSaved();
+    markSaved(body);
     await reloadHandler();
     toast('已保存');
   } catch (error) {
@@ -366,6 +433,56 @@ async function saveCurrentCall() {
     saving = false;
     updateEditButtons();
   }
+}
+
+// requestHeaders builds the header map the way send() does, so the copy and the
+// real request cannot drift apart.
+function requestHeaders() {
+  const headers = headersForSend();
+  const contentType = $('contentType').value;
+  if (contentType) headers['Content-Type'] = contentType;
+  const action = $('soapAction').value.trim();
+  if (action) {
+    if (contentType.startsWith('application/soap+xml')) {
+      headers['Content-Type'] = contentType + '; action="' + action.replace(/"/g, '') + '"';
+    } else {
+      headers['SOAPAction'] = '"' + action.replace(/"/g, '') + '"';
+    }
+  }
+  return headers;
+}
+
+// copyAsCurl puts the current request on the clipboard as a runnable command,
+// for reproducing a problem on another machine. It deliberately does not need a
+// selected sample: an Endpoint plus a body is enough to produce a command, and
+// refusing to copy before saving would force a save just to inspect the request.
+async function copyAsCurl() {
+  const url = $('endpoint').value.trim();
+  if (!url) {
+    toast('请先填写 Endpoint', true);
+    $('endpoint').focus();
+    return;
+  }
+  const timeout = readTimeout();
+  if (timeout == null) return;
+
+  const headers = requestHeaders();
+  let command;
+  try {
+    command = buildCurl({ url, method: 'POST', headers, body: $('requestBody').value, timeoutMs: timeout });
+  } catch (error) {
+    toast(error.message, true);
+    return;
+  }
+
+  // Copying a credential is easy to do by accident, so say so before it lands
+  // on the clipboard.
+  const secrets = sensitiveNames(headers, isSensitiveName);
+  if (secrets.length && !confirm(`命令里含敏感请求头：${secrets.join('、')}\n复制后请注意不要外传。继续？`)) {
+    return;
+  }
+  const ok = await copyText(command, secrets.length ? '已复制为 curl（含敏感头）' : '已复制为 curl');
+  if (!ok) toast('复制失败，请手动选择文本', true);
 }
 
 async function deleteCurrentNode() {

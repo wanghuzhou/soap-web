@@ -1,17 +1,121 @@
 // Package model defines the shared data structures used across the application.
 package model
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
 
 // Project is the root container. It mirrors the structure of a SoapUI project
 // closely enough for import, while staying simple for our own needs.
 type Project struct {
-	ID         string         `json:"id"` // stable identifier for CRUD
-	Name       string         `json:"name"`
-	Source     string         `json:"source"` // e.g. "soapui", "wsdl", "wsdl-url" or "native"
-	Proxy      *ProxySettings `json:"proxy,omitempty"`
-	Services   []Service      `json:"services"`
-	TestSuites []TestSuite    `json:"testSuites"`
+	ID     string         `json:"id"` // stable identifier for CRUD
+	Name   string         `json:"name"`
+	Source string         `json:"source"` // e.g. "soapui", "wsdl", "wsdl-url" or "native"
+	Proxy  *ProxySettings `json:"proxy,omitempty"`
+	// Headers are sent with every request of this project. A call may override
+	// an individual value; see MergeHeaders.
+	Headers    []Header    `json:"headers,omitempty"`
+	Services   []Service   `json:"services"`
+	TestSuites []TestSuite `json:"testSuites"`
+}
+
+// Header is one HTTP header on a project or a call. A slice rather than a map
+// keeps the user's order and lets an empty Value mean "send the header with no
+// value" instead of being indistinguishable from "not set".
+type Header struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+// sensitiveHeaders are masked in the UI when the user asks for it: these carry
+// credentials far more often than not.
+var sensitiveHeaders = []string{"authorization", "proxy-authorization", "cookie", "set-cookie"}
+
+// IsSensitiveName reports whether a header is normally secret, so the UI can
+// mask it by default and a copied request does not leak a password by accident.
+func IsSensitiveName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, s := range sensitiveHeaders {
+		if lower == s {
+			return true
+		}
+	}
+	// Anything with these substrings is treated as a credential too: x-api-key,
+	// app-token, client-secret and the like.
+	for _, frag := range []string{"token", "secret", "password", "apikey", "api-key", "x-auth"} {
+		if strings.Contains(lower, frag) {
+			return true
+		}
+	}
+	return false
+}
+
+// MergeHeaders overlays a call's headers on the project defaults. Matching is
+// case-insensitive (HTTP header names are), the result keeps the project order
+// then appends call-only names in the order they appear.
+func MergeHeaders(project, call []Header) []Header {
+	if len(project) == 0 && len(call) == 0 {
+		return nil
+	}
+	out := make([]Header, 0, len(project)+len(call))
+	index := map[string]int{}
+	add := func(h Header) {
+		name := strings.TrimSpace(h.Name)
+		if name == "" {
+			return
+		}
+		key := strings.ToLower(name)
+		if i, ok := index[key]; ok {
+			out[i].Value = h.Value
+			return
+		}
+		index[key] = len(out)
+		out = append(out, Header{Name: name, Value: h.Value})
+	}
+	for _, h := range project {
+		add(h)
+	}
+	for _, h := range call {
+		add(h)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// ValidateHeaders rejects names that cannot be sent: a request with a bad
+// header name fails at the transport layer with an opaque error, so it is
+// caught here where the message can name the culprit.
+func ValidateHeaders(headers []Header) error {
+	for _, h := range headers {
+		name := strings.TrimSpace(h.Name)
+		if name == "" {
+			return errors.New("请求头名称不能为空")
+		}
+		for _, r := range name {
+			if r <= ' ' || r >= 0x7f || strings.ContainsRune("()<>@,;:\\\"/[]?={}", r) {
+				return fmt.Errorf("请求头名称 %q 含非法字符", name)
+			}
+		}
+		if strings.ContainsAny(h.Value, "\r\n") {
+			return fmt.Errorf("请求头 %q 的值不能包含换行", name)
+		}
+	}
+	return nil
+}
+
+// HasHeaderValue reports whether name already appears in headers.
+func HasHeaderValue(headers []Header, name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	for _, h := range headers {
+		if strings.ToLower(strings.TrimSpace(h.Name)) == name {
+			return true
+		}
+	}
+	return false
 }
 
 // ProxySettings controls how requests of a project reach the network.
@@ -91,6 +195,36 @@ type Call struct {
 	Endpoint string `json:"endpoint"`
 	Action   string `json:"action"`
 	Request  string `json:"request"` // raw XML body
+	// Headers override the project's defaults for this sample only.
+	Headers []Header `json:"headers,omitempty"`
+	// TimeoutMS bounds this sample's request. 0 means "use the default".
+	TimeoutMS int `json:"timeoutMs,omitempty"`
+}
+
+// DefaultTimeoutMS applies when neither the sample nor the caller sets one.
+// Slow legacy services sometimes need more; a runaway request must not hold a
+// connection open forever.
+const DefaultTimeoutMS = 60000
+
+// MinTimeoutMS / MaxTimeoutMS bound the value a caller may ask for. The lower
+// bound keeps a typo ("1") from turning every request into an instant timeout.
+const (
+	MinTimeoutMS = 1000
+	MaxTimeoutMS = 600000
+)
+
+// EffectiveTimeout returns the timeout to use, clamped into the allowed range.
+func (c Call) EffectiveTimeout() int {
+	if c.TimeoutMS <= 0 {
+		return DefaultTimeoutMS
+	}
+	if c.TimeoutMS < MinTimeoutMS {
+		return MinTimeoutMS
+	}
+	if c.TimeoutMS > MaxTimeoutMS {
+		return MaxTimeoutMS
+	}
+	return c.TimeoutMS
 }
 
 // DefaultRequestBody returns the body a new request sample should start from:

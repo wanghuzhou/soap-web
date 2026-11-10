@@ -4,6 +4,7 @@ import { $ } from './dom.js';
 import { state } from './state.js';
 import { prettyXML, highlightXML, formatSize } from './xml.js';
 import { toast } from './toast.js';
+import { copyText } from './clipboard.js';
 
 export function initResponse() {
   document.querySelectorAll('.resp-tabs .tab').forEach((tab) => {
@@ -101,21 +102,6 @@ async function copyResponse() {
   const text = state.view === 'headers'
     ? headersToText(state.response.headers)
     : (state.response.body || '');
-  try {
-    await navigator.clipboard.writeText(text);
-    toast('响应已复制');
-  } catch (error) {
-    // execCommand returns false on failure instead of throwing, so check it.
-    const helper = document.createElement('textarea');
-    helper.value = text;
-    helper.style.position = 'fixed';
-    helper.style.opacity = '0';
-    document.body.appendChild(helper);
-    helper.select();
-    let ok = false;
-    try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
-    helper.remove();
-    if (ok) toast('响应已复制');
-    else toast('复制失败，请手动选择文本', true);
-  }
+  const ok = await copyText(text, '响应已复制');
+  if (!ok) toast('复制失败，请手动选择文本', true);
 }

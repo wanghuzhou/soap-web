@@ -92,7 +92,8 @@ export function initLayout() {
     handle.addEventListener('pointerdown', (event) => {
       if (event.button !== 0 || !isWide()) return;
       event.preventDefault();
-      handle.setPointerCapture(event.pointerId);
+      const pointerId = event.pointerId;
+      handle.setPointerCapture(pointerId);
 
       const startX = event.clientX;
       const start = currentColumns();
@@ -112,19 +113,25 @@ export function initLayout() {
         if (!frame) frame = requestAnimationFrame(flush);
       };
 
-      const finish = (cancel) => {
+      // `cancelled` rather than `cancel`: the old parameter name shadowed the
+      // cancel() handler below, so removeEventListener received a boolean and
+      // threw — which aborted the function before saveColumns() ran. The
+      // symptom was a resize that looked fine until the page was reloaded.
+      const finish = (cancelled) => {
         if (frame) { cancelAnimationFrame(frame); frame = 0; }
         handle.classList.remove('dragging');
         document.body.classList.remove('resizing');
         handle.removeEventListener('pointermove', move);
         handle.removeEventListener('pointerup', up);
         handle.removeEventListener('pointercancel', cancel);
-        if (handle.hasPointerCapture && handle.hasPointerCapture(event.pointerId)) {
-          handle.releasePointerCapture(event.pointerId);
+        if (handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
+          handle.releasePointerCapture(pointerId);
         }
-        if (!cancel) saveColumns();
+        if (!cancelled) saveColumns();
       };
 
+      // Declared before finish() uses them so a future refactor cannot hit a
+      // temporal-dead-zone error.
       const up = () => finish(false);
       const cancel = () => finish(true);
 

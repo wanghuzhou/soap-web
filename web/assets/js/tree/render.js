@@ -4,6 +4,7 @@ import { $, escapeHtml, escapeAttr } from '../dom.js';
 import { state, toggleCollapsed, pruneCollapsed } from '../state.js';
 import { proxyLabel } from '../proxy.js';
 import { cancelActiveRename } from '../inlineedit.js';
+import { getQuery, applyTreeFilter } from './search.js';
 
 function isCollapsed(key) {
   return !!state.collapsed[key];
@@ -117,6 +118,7 @@ export function renderTree() {
 
         (operation.calls || []).forEach((call) => {
           const callActions = `
+            <button class="mini" title="复制该请求样例" data-act="duplicate-call" data-pid="${escapeAttr(project.id)}" data-sid="${escapeAttr(service.id)}" data-oid="${escapeAttr(operation.id)}" data-cid="${escapeAttr(call.id)}">⧉</button>
             <button class="mini" title="重命名请求（就地编辑）" data-act="rename-call" data-pid="${escapeAttr(project.id)}" data-sid="${escapeAttr(service.id)}" data-oid="${escapeAttr(operation.id)}" data-cid="${escapeAttr(call.id)}">✎</button>
             <button class="mini danger" title="删除请求" data-act="del-call" data-pid="${escapeAttr(project.id)}" data-sid="${escapeAttr(service.id)}" data-oid="${escapeAttr(operation.id)}" data-cid="${escapeAttr(call.id)}">✕</button>`;
           html += rowHtml({
@@ -139,7 +141,10 @@ export function renderTree() {
 
   tree.innerHTML = html;
   pruneCollapsed(collectKeys(projects));
-  applyCollapseVisibility();
+  // A filter outranks the collapse state, so a re-render has to re-apply it
+  // rather than fall back to the plain collapsed view.
+  if (getQuery()) applyTreeFilter();
+  else applyCollapseVisibility();
 }
 
 // collectKeys returns every id that may still be collapsed, so orphaned keys
@@ -192,10 +197,13 @@ export function updateCaret(key) {
 }
 
 // toggleNode collapses or expands one node without rebuilding the tree.
+// While a filter is active the filter decides visibility, so toggling only
+// updates the caret: hiding a result's parent would make it unreachable.
 export function toggleNode(key) {
   toggleCollapsed(key);
   updateCaret(key);
-  applyCollapseVisibility();
+  if (getQuery()) applyTreeFilter();
+  else applyCollapseVisibility();
 }
 
 // updateRowLabel rewrites one row's visible text and tooltip in place. A rename

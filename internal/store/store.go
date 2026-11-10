@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -144,6 +145,7 @@ func cloneProject(p model.Project) model.Project {
 		proxy := *p.Proxy
 		out.Proxy = &proxy
 	}
+	out.Headers = cloneHeaders(p.Headers)
 	if p.Services != nil {
 		out.Services = make([]model.Service, len(p.Services))
 		for i, svc := range p.Services {
@@ -157,6 +159,15 @@ func cloneProject(p model.Project) model.Project {
 		}
 	}
 	return out
+}
+
+// cloneHeaders copies a header slice, preserving nil so an untouched project
+// keeps its JSON shape (omitempty).
+func cloneHeaders(in []model.Header) []model.Header {
+	if in == nil {
+		return nil
+	}
+	return append([]model.Header(nil), in...)
 }
 
 func cloneService(svc model.Service) model.Service {
@@ -174,8 +185,16 @@ func cloneOperation(op model.Operation) model.Operation {
 	out := op
 	if op.Calls != nil {
 		out.Calls = make([]model.Call, len(op.Calls))
-		copy(out.Calls, op.Calls)
+		for i, c := range op.Calls {
+			out.Calls[i] = cloneCall(c)
+		}
 	}
+	return out
+}
+
+func cloneCall(c model.Call) model.Call {
+	out := c
+	out.Headers = cloneHeaders(c.Headers)
 	return out
 }
 
@@ -470,6 +489,56 @@ func (s *Store) DeleteCall(projectID, serviceID, opID, callID string) error {
 		}
 		return nil, ErrNotFound
 	})
+}
+
+// DuplicateCall copies a call within its operation, giving the copy a title
+// that does not collide with a sibling ("查询" → "查询 (副本)" → "查询 (副本 2)").
+// The UI uses it to create a variant of an existing sample instead of starting
+// from the operation template.
+func (s *Store) DuplicateCall(projectID, serviceID, opID, callID string) (model.Call, error) {
+	var out model.Call
+	err := s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
+		if !ok {
+			return nil, ErrNotFound
+		}
+		op := &list[pi].Services[si].Operations[oi]
+		for _, c := range op.Calls {
+			if c.ID != callID {
+				continue
+			}
+			c.ID = NewID()
+			c.Title = copyTitle(c.Title, op.Calls)
+			c.Headers = append([]model.Header(nil), c.Headers...)
+			op.Calls = append(op.Calls, c)
+			out = c
+			return list, nil
+		}
+		return nil, ErrNotFound
+	})
+	return out, err
+}
+
+// copyTitle returns "<title> (副本)" or, when that is taken, the first free
+// "<title> (副本 N)" with N starting at 2.
+func copyTitle(title string, siblings []model.Call) string {
+	if title == "" {
+		title = "请求"
+	}
+	base := title + " (副本)"
+	taken := make(map[string]bool, len(siblings))
+	for _, c := range siblings {
+		taken[c.Title] = true
+	}
+	if !taken[base] {
+		return base
+	}
+	for n := 2; ; n++ {
+		candidate := fmt.Sprintf("%s (副本 %d)", title, n)
+		if !taken[candidate] {
+			return candidate
+		}
+	}
 }
 
 // EnsureIDs fills in missing ids throughout a project tree.

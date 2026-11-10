@@ -109,6 +109,8 @@ export async function apiUpload(url, file, options = {}) {
 
 // apiSend posts a SOAP request. The timeout comes from the payload (the server
 // honours its own copy too), and an abort signal lets the UI cancel a send.
+// The client waits slightly longer than the server so the server's own timeout
+// message ("请求失败: ...") reaches the user instead of a bare client abort.
 export async function apiSend(payload, options = {}) {
   const timeoutMs = options.timeoutMs != null
     ? options.timeoutMs

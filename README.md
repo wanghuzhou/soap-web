@@ -17,6 +17,11 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 - **WSDL 解析**：解析 WSDL 1.1 + 内嵌 XSD，列出所有 operation，并为每个 operation 自动生成一条结构正确的请求样例（支持嵌套 complexType、extension 继承、choice 降级）。
 - **WSDL URL 导入**：除本地文件外，可直接填写 `http://host/service?wsdl` 由后端抓取并解析，适用于只有内网可达的服务；下载支持**直连（默认）/ 系统代理 / 自定义 HTTP·SOCKS5 代理**，也可复用已有工程的代理配置；支持 GBK 等非 UTF-8 编码，并对协议（仅 http/https）、大小（8 MB）与超时（30s）做限制。
 - **SOAP 请求发送**：支持 SOAP 1.1（`text/xml` + `SOAPAction`）与 SOAP 1.2（`application/soap+xml` + action）。
+- **自定义请求头**：请求面板里的「请求头」可添加任意头（Authorization、token、appKey 等）。支持两层：**工程默认**（对工程内所有请求生效）+ **样例覆盖**（只改当前请求样例）。同名时样例优先，比较不区分大小写。`Authorization`、`Cookie`、含 token/secret/apikey 的头默认以密码框遮蔽，可勾选底部的「遮蔽敏感头」关闭。工程默认头在样例里只读，填写同名的行即可覆盖。
+- **超时设置**：Endpoint 旁可填毫秒值，留空按 60 秒；范围 1 秒～10 分钟。超时随请求样例保存。
+- **复制请求样例**：请求行上的 ⧉ 按钮复制整条样例（报文、Endpoint、SOAPAction、请求头、超时），标题自动加「(副本)」并避开重名。
+- **树搜索**：工程树顶部输入框按名字过滤工程/服务/操作/请求，命中行及其祖先保持可见，命中项高亮；过滤不重建 DOM，焦点与滚动位置不丢；`Esc` 清空。
+- **复制为 curl**：响应区「复制为 curl」把当前请求导出成 bash/zsh 可执行的单行命令（含 `-H`、`--data-binary`、`--max-time`），便于在服务器上复现。命令里含敏感头时会先确认，报文超过 512 KB 会提示不适合转命令行。
 - **请求体编辑**：XML 语法高亮、格式化/压缩、长行自动换行。
 - **响应多视图**：格式化（语法高亮）/ 原始 / Headers，显示状态码、耗时、大小，支持一键复制。
 - **非 UTF-8 编码支持**：GBK / GB2312 / GB18030 / Big5 的响应体与 WSDL、SoapUI 工程均可正确解码（国内老 SOAP 服务常见）。响应体大小上限 16 MB，超出会标记「已截断」。
@@ -79,7 +84,15 @@ web/assets/js/         前端 ES Modules（无构建步骤）
   popover.js           弹出菜单定位（rowmenu/workspace 共用）
   xml.js               XML 格式化 / 压缩 / 语法高亮 / 换行规整
   tree.js              工程树渲染与 CRUD
+  tree/render.js       行渲染、折叠可见性、选中标记
+  tree/nav.js          ARIA 键盘导航与选中分发
+  tree/actions.js      树 CRUD 动作、工程菜单、就地重命名
+  tree/search.js       按名字过滤工程树
   editor.js            请求编辑与发送
+  editor/textarea.js   编辑区：语法高亮同步与 Tab 缩进
+  headers.js           请求头编辑（工程默认 + 样例覆盖，敏感头遮蔽）
+  curl.js              生成可执行的 curl 命令
+  clipboard.js         剪贴板写入（含 execCommand 降级）
   response.js          响应渲染与复制
   proxy.js             工程代理设置
   wsdlurl.js           从 URL 导入 WSDL 的对话框
@@ -99,6 +112,7 @@ go test -race ./...                        # 含数据竞争检测
 node web/selftest/xml.selftest.mjs         # 前端 XML 管线回归自测（需 Node 18+）
 node web/selftest/tree.selftest.mjs        # 工程树渲染契约回归自测（需 Node 18+）
 node web/selftest/workspace.selftest.mjs   # 工作空间切换器回归自测（需 Node 18+）
+node web/selftest/features.selftest.mjs    # 请求头合并 / curl 生成 / 树过滤回归自测
 ```
 
 `xml.selftest.mjs` 直接 import 真实的 ES Modules，覆盖格式化语义保真、换行规整不误伤数据、语法高亮转义等不变量。
@@ -125,12 +139,14 @@ node web/selftest/workspace.selftest.mjs   # 工作空间切换器回归自测�
 | POST | `/api/projects` | 新建工程 |
 | GET/PUT/DELETE | `/api/projects/{pid}` | 获取 / 整体更新（含重命名）/ 删除工程 |
 | PUT | `/api/projects/{pid}/proxy` | 仅更新工程代理设置（避免整体覆盖并发修改） |
+| PUT | `/api/projects/{pid}/name` | 仅更新工程名称（重命名走窄写，不覆盖并发修改） |
 | GET | `/api/projects/{pid}/export` | 导出为 SoapUI 兼容 XML（下载） |
 | POST | `/api/projects/{pid}/services` | 新建服务 |
 | DELETE | `/api/projects/{pid}/services/{sid}` | 删除服务 |
 | POST | `/api/projects/{pid}/services/{sid}/operations` | 新建操作 |
 | DELETE | `/api/projects/{pid}/services/{sid}/operations/{oid}` | 删除操作 |
 | POST | `/api/projects/{pid}/services/{sid}/operations/{oid}/calls` | 新建请求样例 |
+| POST | `.../operations/{oid}/calls/{cid}/duplicate` | 复制请求样例，返回新样例（标题自动加「(副本)」） |
 | PUT/DELETE | `.../operations/{oid}/calls/{cid}` | 更新 / 删除请求样例 |
 | GET | `/api/health` | 健康检查，同时返回当前工作空间（`{status, workspace}`） |
 

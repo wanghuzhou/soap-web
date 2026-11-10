@@ -1,6 +1,7 @@
 package api
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -36,10 +37,34 @@ func (s *Server) registerProjectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/projects/{pid}/services/{sid}/operations/{oid}/calls", s.handleAddCall)
 	mux.HandleFunc("PUT /api/projects/{pid}/services/{sid}/operations/{oid}/calls/{cid}", s.handleUpdateCall)
 	mux.HandleFunc("DELETE /api/projects/{pid}/services/{sid}/operations/{oid}/calls/{cid}", s.handleDeleteCall)
+	mux.HandleFunc("POST /api/projects/{pid}/services/{sid}/operations/{oid}/calls/{cid}/duplicate", s.handleDuplicateCall)
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, storeFrom(r).List())
+}
+
+// validateProject checks the parts of a project the server can reject before
+// writing: the proxy configuration and the request headers. Header names end up
+// in the transport layer, where a bad one produces an opaque error, so they are
+// rejected here with a message that names the culprit.
+func validateProject(project model.Project) error {
+	if err := project.Proxy.Validate(); err != nil {
+		return fmt.Errorf("代理配置无效: %w", err)
+	}
+	if err := model.ValidateHeaders(project.Headers); err != nil {
+		return err
+	}
+	for _, svc := range project.Services {
+		for _, op := range svc.Operations {
+			for _, c := range op.Calls {
+				if err := model.ValidateHeaders(c.Headers); err != nil {
+					return fmt.Errorf("请求样例「%s」: %w", c.Title, err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
@@ -47,8 +72,8 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if err := project.Proxy.Validate(); err != nil {
-		writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
+	if err := validateProject(project); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	saved, err := storeFrom(r).AddProject(project)
@@ -74,8 +99,8 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project.ID = r.PathValue("pid")
-	if err := project.Proxy.Validate(); err != nil {
-		writeErr(w, http.StatusBadRequest, "代理配置无效: "+err.Error())
+	if err := validateProject(project); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := storeFrom(r).UpdateProject(project); err != nil {
@@ -204,6 +229,10 @@ func (s *Server) handleAddCall(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if err := model.ValidateHeaders(call.Headers); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	saved, err := storeFrom(r).AddCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), call)
 	if err != nil {
 		mapStoreErr(w, err)
@@ -212,12 +241,28 @@ func (s *Server) handleAddCall(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, saved)
 }
 
+// handleDuplicateCall copies a request sample within its operation and returns
+// the new sample, so the caller can select and rename it immediately.
+func (s *Server) handleDuplicateCall(w http.ResponseWriter, r *http.Request) {
+	copied, err := storeFrom(r).DuplicateCall(
+		r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), r.PathValue("cid"))
+	if err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, copied)
+}
+
 func (s *Server) handleUpdateCall(w http.ResponseWriter, r *http.Request) {
 	call, ok := decodeJSON[model.Call](w, r)
 	if !ok {
 		return
 	}
 	call.ID = r.PathValue("cid")
+	if err := model.ValidateHeaders(call.Headers); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if err := storeFrom(r).UpdateCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), call); err != nil {
 		mapStoreErr(w, err)
 		return

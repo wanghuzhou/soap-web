@@ -71,6 +71,11 @@
           </div>
           <button id="btnNewProjectSide" class="icon-btn" title="新建空白工程" aria-label="新建空白工程">＋</button>
         </div>
+        <!-- Filter by node name; matching ancestors stay visible so the path is readable. -->
+        <div class="tree-search">
+          <input id="treeSearch" type="search" placeholder="搜索工程 / 服务 / 操作 / 请求" spellcheck="false" autocomplete="off" aria-label="搜索工程树">
+          <button id="treeSearchClear" class="tree-search-clear hidden" type="button" title="清除搜索" aria-label="清除搜索">✕</button>
+        </div>
         <div id="tree" class="tree" role="tree" aria-label="工程列表">
           <div class="empty-state">
             <div class="empty-icon" aria-hidden="true">⌁</div>
@@ -96,6 +101,11 @@
           <div class="field-row">
             <label for="endpoint">Endpoint</label>
             <input id="endpoint" type="text" placeholder="http://host/service.asmx" spellcheck="false" autocomplete="off">
+            <label class="inline-field" for="timeoutMs" title="请求超时（毫秒），留空用默认 60 秒">
+              <span class="inline-label">超时</span>
+              <input id="timeoutMs" type="number" min="1000" max="600000" step="1000" placeholder="60000" inputmode="numeric" autocomplete="off">
+              <span class="inline-unit">ms</span>
+            </label>
           </div>
           <div class="field-grid">
             <div class="field-row">
@@ -111,6 +121,25 @@
             </div>
           </div>
         </div>
+
+        <!--
+          Headers are shown for the selected request sample: project defaults
+          come first (marked 工程) and the sample's own overrides follow. A row
+          that only exists on the project cannot be removed from here.
+        -->
+        <details id="headersPanel" class="headers-panel">
+          <summary>
+            <span class="editor-label">请求头</span>
+            <span id="headersCount" class="count-badge">0</span>
+          </summary>
+          <div class="headers-body">
+            <div id="headersList" class="headers-list"></div>
+            <div class="headers-actions">
+              <button id="btnAddHeader" class="tool-btn" type="button">+ 添加请求头</button>
+              <label class="check-label"><input id="maskSecrets" type="checkbox" checked> 遮蔽敏感头</label>
+            </div>
+          </div>
+        </details>
 
         <div class="editor-toolbar">
           <span class="editor-label">XML 报文</span>
@@ -132,6 +161,7 @@
           <button id="btnSend" class="btn primary send-btn">发送请求 <span class="kbd">Ctrl+Enter</span></button>
           <button id="btnSaveCall" class="btn ghost" title="保存当前请求样例到工程（Ctrl+S）" disabled>保存请求</button>
           <button id="btnDeleteNode" class="btn ghost danger-text" title="删除当前选中项" disabled>删除</button>
+          <button id="btnCopyCurl" class="btn ghost" title="把当前请求复制成可直接执行的 curl 命令" disabled>复制为 curl</button>
           <span id="sendInfo" class="send-info"></span>
         </div>
       </section>
