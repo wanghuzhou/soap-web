@@ -132,6 +132,47 @@ func TestInitRotatesLargeFile(t *testing.T) {
 	}
 }
 
+// TestWriteRotatesAtSizeLimit checks rotation happens while the process is
+// running, not only at the next Init: the README promises the log directory
+// stays bounded on a long-lived instance.
+func TestWriteRotatesAtSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	path, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { restoreLogger(t) })
+
+	// The first line pushes the active file past the cap; the next Write must
+	// rotate before appending.
+	log.Print(strings.Repeat("x", maxSize))
+	log.Print("after rotation")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if !strings.Contains(string(data), "after rotation") {
+		t.Errorf("active log is missing the post-rotation line:\n%s", data)
+	}
+	if len(data) >= maxSize {
+		t.Errorf("active log is still %d bytes after rotation", len(data))
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	var backups int
+	for _, e := range entries {
+		if e.Name() != FileName {
+			backups++
+		}
+	}
+	if backups == 0 {
+		t.Error("no rotated backup was created")
+	}
+}
+
 // TestInitReportsUnusableDirectory keeps the caller able to start without a
 // log file instead of panicking.
 func TestInitReportsUnusableDirectory(t *testing.T) {

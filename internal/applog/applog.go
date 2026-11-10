@@ -69,16 +69,21 @@ func Init(dir string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("打开日志文件 %s 失败: %w", path, err)
 	}
-	if info, statErr := f.Stat(); statErr == nil && info.Size() >= maxSize {
+	size := int64(0)
+	if info, statErr := f.Stat(); statErr == nil {
+		size = info.Size()
+	}
+	if size >= maxSize {
 		_ = f.Close()
-		rotate(path)
+		_ = rotate(path)
 		f, err = os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 		if err != nil {
 			return "", fmt.Errorf("重建日志文件 %s 失败: %w", path, err)
 		}
+		size = 0
 	}
 
-	s := &sink{file: f, path: path}
+	s := &sink{file: f, path: path, size: size}
 	// The sink timestamps both destinations itself; the logger's own prefix
 	// would only duplicate it.
 	log.SetFlags(0)
@@ -90,13 +95,13 @@ func Init(dir string) (string, error) {
 }
 
 // rotate renames the current log to soap-web-<时间>.log, replacing an older file
-// with the same name. Failures are ignored: losing history beats refusing to
-// log.
-func rotate(path string) {
+// with the same name. A failure is returned so the caller can decide whether to
+// keep appending to the current file; losing history beats refusing to log.
+func rotate(path string) error {
 	ext := filepath.Ext(path)
 	backup := path[:len(path)-len(ext)] + "-" + time.Now().Format("20060102-150405") + ext
 	_ = os.Remove(backup)
-	_ = os.Rename(path, backup)
+	return os.Rename(path, backup)
 }
 
 // sink formats each record twice: a short line for the console and a
@@ -106,6 +111,9 @@ type sink struct {
 	file *os.File
 	path string
 	now  func() time.Time
+	// size is how much has been written to file, so the file is rotated while
+	// the process is running and not only at the next startup.
+	size int64
 }
 
 func (s *sink) Write(p []byte) (int, error) {
@@ -126,12 +134,56 @@ func (s *sink) Write(p []byte) (int, error) {
 	if s.now == nil {
 		s.now = time.Now
 	}
+	if s.size >= maxSize {
+		s.rotateLocked()
+	}
+	if s.file == nil {
+		// Rotation or a previous write failed. Try once more to reopen; if the
+		// directory is gone, keep logging to the console rather than panicking.
+		s.openLocked()
+	}
+	if s.file == nil {
+		return len(p), nil
+	}
 	line := s.now().Format("2006-01-02 15:04:05.000") + " " + msg + "\n"
-	if _, err := s.file.WriteString(line); err != nil {
+	n, err := s.file.WriteString(line)
+	s.size += int64(n)
+	if err != nil {
 		// A full disk or a removed file must not kill the app.
 		_, _ = fmt.Fprintf(os.Stderr, "写入日志文件 %s 失败: %v\n", s.path, err)
 	}
 	return len(p), nil
+}
+
+// rotateLocked closes the active file, renames it aside, and opens a fresh one.
+// The caller holds s.mu.
+func (s *sink) rotateLocked() {
+	if s.file != nil {
+		_ = s.file.Close()
+		s.file = nil
+	}
+	if err := rotate(s.path); err != nil {
+		// Renaming failed (for example the file is held open by another
+		// process on Windows). Keep appending to it.
+		_, _ = fmt.Fprintf(os.Stderr, "轮转日志文件 %s 失败: %v\n", s.path, err)
+	}
+	// Reset the counter whether or not the rename succeeded. A failed rename
+	// leaves the old file in place; retrying on the very next line would flood
+	// the console, so wait for another maxSize worth of lines instead.
+	s.size = 0
+	s.openLocked()
+}
+
+// openLocked opens the log file for append. The caller holds s.mu and owns
+// s.size: opening must not silently restore the old size, or a failed rotation
+// would retry on every line.
+func (s *sink) openLocked() {
+	f, err := os.OpenFile(s.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "重建日志文件 %s 失败: %v\n", s.path, err)
+		return
+	}
+	s.file = f
 }
 
 func trimNewline(s string) string {
