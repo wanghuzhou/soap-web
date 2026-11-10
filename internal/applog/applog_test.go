@@ -1,6 +1,7 @@
 package applog
 
 import (
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -49,6 +50,48 @@ func TestInitWritesConsoleAndFile(t *testing.T) {
 	}
 	if !strings.Contains(text, time.Now().Format("2006-01-02")) {
 		t.Errorf("log line has no timestamp:\n%s", text)
+	}
+}
+
+// TestDebugfSkipsConsole pins the level boundary: a debug line is written to
+// the file but never echoed to the console.
+func TestDebugfSkipsConsole(t *testing.T) {
+	dir := t.TempDir()
+	path, err := Init(dir)
+	if err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+	t.Cleanup(func() { restoreLogger(t) })
+
+	// Swap stderr for a pipe so the console output can be inspected.
+	origStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = w
+	Debugf("[请求失败 400] 缺少 url")
+	log.Printf("[错误] 保存失败")
+	_ = w.Close()
+	os.Stderr = origStderr
+
+	console, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatalf("read console: %v", err)
+	}
+	if strings.Contains(string(console), "缺少 url") {
+		t.Errorf("debug line reached the console: %q", string(console))
+	}
+	if !strings.Contains(string(console), "[错误] 保存失败") {
+		t.Errorf("error line missing from the console: %q", string(console))
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if !strings.Contains(string(data), "[调试] [请求失败 400] 缺少 url") {
+		t.Errorf("debug line missing from the log file:\n%s", string(data))
 	}
 }
 

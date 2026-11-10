@@ -12,6 +12,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,7 +28,17 @@ const (
 	maxSize = 4 << 20
 	// consoleMaxRunes keeps console lines readable; the file keeps everything.
 	consoleMaxRunes = 150
+	// debugPrefix marks a line as file-only. Routine client errors (a stale
+	// tab's 409, a validation failure) are useful when reading the log later
+	// but would flood the console the user is watching.
+	debugPrefix = "[调试] "
 )
+
+// Debugf writes a file-only log line. The console stays for warnings and
+// errors, so a user cannot tell a validation failure from a broken page.
+func Debugf(format string, args ...any) {
+	log.Printf(debugPrefix+format, args...)
+}
 
 // current is the active sink, if any, so Close can release the file. Tests on
 // Windows cannot delete a directory that still holds an open log file.
@@ -100,11 +111,15 @@ type sink struct {
 func (s *sink) Write(p []byte) (int, error) {
 	msg := trimNewline(string(p))
 
-	short := []rune(msg)
-	if len(short) > consoleMaxRunes {
-		short = append(short[:consoleMaxRunes], '…')
+	// A debug line belongs in the file only; echoing it would defeat the
+	// point of keeping the console quiet during routine failures.
+	if !strings.HasPrefix(msg, debugPrefix) {
+		short := []rune(msg)
+		if len(short) > consoleMaxRunes {
+			short = append(short[:consoleMaxRunes], '…')
+		}
+		_, _ = fmt.Fprintln(os.Stderr, string(short))
 	}
-	_, _ = fmt.Fprintln(os.Stderr, string(short))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

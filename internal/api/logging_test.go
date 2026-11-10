@@ -19,8 +19,9 @@ func captureLog(t *testing.T) *bytes.Buffer {
 	return &buf
 }
 
-// TestLoggingRecordsFailures pins the behaviour the log file relies on: an
-// error response is visible with its message, and a routine success is not.
+// TestLoggingRecordsFailures pins the behaviour the log file relies on: a
+// client error is recorded at debug level (file only), and a routine success
+// is not recorded at all.
 func TestLoggingRecordsFailures(t *testing.T) {
 	_, mux, _ := newTestServer(t)
 	buf := captureLog(t)
@@ -33,11 +34,15 @@ func TestLoggingRecordsFailures(t *testing.T) {
 	}
 
 	out := buf.String()
-	if !strings.Contains(out, "[警告]") {
-		t.Errorf("client error was not logged:\n%s", out)
+	if !strings.Contains(out, "[调试] [请求失败 404]") {
+		t.Errorf("client error was not logged at debug level:\n%s", out)
 	}
-	if !strings.Contains(out, "GET /api/projects/nope -> 404") {
+	if !strings.Contains(out, "[调试] GET /api/projects/nope -> 404") {
 		t.Errorf("access line missing:\n%s", out)
+	}
+	// A 4xx must not be dressed up as a warning: the console stays quiet.
+	if strings.Contains(out, "[警告]") {
+		t.Errorf("client error should not be a warning:\n%s", out)
 	}
 
 	buf.Reset()
@@ -48,6 +53,29 @@ func TestLoggingRecordsFailures(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "GET /api/projects") {
 		t.Errorf("successful read should not be logged:\n%s", buf.String())
+	}
+}
+
+// TestStaleWorkspaceIsDebugLevel covers the 409 path: it is expected whenever a
+// window is left open across a switch, so it must not reach the console.
+func TestStaleWorkspaceIsDebugLevel(t *testing.T) {
+	_, mux, _ := newTestServer(t)
+	buf := captureLog(t)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/projects", nil)
+	req.Header.Set(workspaceHeader, "stale-workspace")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "[调试] 拒绝过期标签页的请求") {
+		t.Errorf("stale-tab rejection was not logged:\n%s", out)
+	}
+	if strings.Contains(out, "[警告]") {
+		t.Errorf("stale-tab rejection should not be a warning:\n%s", out)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"soapweb/internal/applog"
 	"soapweb/internal/model"
 	"soapweb/internal/soapuiproj"
 	"soapweb/internal/store"
@@ -70,7 +71,9 @@ func (s *Server) withWorkspace(next http.Handler) http.Handler {
 		// workspace API is how it recovers.
 		if !workspaceExempt(r) {
 			if want := r.Header.Get(workspaceHeader); want != "" && want != info.ID {
-				log.Printf("拒绝过期标签页的请求：%s %s（标签页工作空间 %s，当前 %s）",
+				// Expected whenever a tab is left open across a switch, so it
+				// is recorded for diagnosis without reaching the console.
+				applog.Debugf("拒绝过期标签页的请求：%s %s（标签页工作空间 %s，当前 %s）",
 					r.Method, r.URL.Path, want, info.ID)
 				writeJSON(w, http.StatusConflict, map[string]any{
 					"error":     "工作空间已在其他窗口切换，请先同步后再操作",

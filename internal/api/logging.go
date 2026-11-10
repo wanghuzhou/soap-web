@@ -4,6 +4,8 @@ import (
 	"log"
 	"net/http"
 	"time"
+
+	"soapweb/internal/applog"
 )
 
 // statusRecorder remembers the status code so withLogging can report it.
@@ -43,8 +45,9 @@ func withLogging(next http.Handler) http.Handler {
 		case rec.status >= http.StatusInternalServerError:
 			log.Printf("%s %s -> %d（耗时 %s）", r.Method, r.URL.RequestURI(), rec.status, elapsed.Round(time.Millisecond))
 		case rec.status >= http.StatusBadRequest:
-			// 4xx are routine (a stale tab's 409, a bad upload); keep them short.
-			log.Printf("%s %s -> %d", r.Method, r.URL.RequestURI(), rec.status)
+			// 4xx are routine (a stale tab's 409, a bad upload); they go to the
+			// file only, so the console stays readable.
+			applog.Debugf("%s %s -> %d", r.Method, r.URL.RequestURI(), rec.status)
 		default:
 			// Successful reads would drown the log; only note slow ones.
 			if elapsed > time.Second {

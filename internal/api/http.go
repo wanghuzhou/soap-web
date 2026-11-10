@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 
+	"soapweb/internal/applog"
 	"soapweb/internal/store"
 )
 
@@ -100,11 +101,15 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 func writeErr(w http.ResponseWriter, status int, msg string) {
 	// Every client-visible failure also lands in the log file: the browser only
 	// shows the message, the file keeps it next to what led there.
-	level := "警告"
+	//
+	// 4xx is deliberately file-only. Most of them are the user being told to
+	// fill in a field, or a stale tab being refused — real events, but not
+	// things to interrupt a console that may be the only window they have open.
 	if status >= http.StatusInternalServerError {
-		level = "错误"
+		log.Printf("[错误] %s", msg)
+	} else {
+		applog.Debugf("[请求失败 %d] %s", status, msg)
 	}
-	log.Printf("[%s] %s", level, msg)
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
