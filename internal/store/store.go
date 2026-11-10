@@ -26,7 +26,11 @@ var ErrNotFound = errors.New("未找到指定对象")
 
 // Store is the persistent project repository.
 type Store struct {
-	mu       sync.RWMutex
+	// mu guards projects for readers and the final in-memory swap.
+	mu sync.RWMutex
+	// writeMu serializes the clone -> write -> swap cycle, so JSON encoding and
+	// disk I/O never block readers.
+	writeMu  sync.Mutex
 	path     string
 	projects []model.Project
 }
@@ -99,15 +103,24 @@ func NewID() string {
 	return hex.EncodeToString(b)
 }
 
-// saveProjects persists the project list atomically. Caller must hold the lock.
+// saveProjects persists the project list atomically. Callers either run before
+// the store is shared (New) or hold writeMu (commit).
 func (s *Store) saveProjects(projects []model.Project) error {
 	return fileutil.WriteJSONAtomic(s.path, projects, 0o644)
 }
 
 // commit applies mutate to a deep copy, persists it, and only then swaps it
-// into memory, so a failed write leaves memory unchanged. Caller holds the lock.
+// into memory, so a failed write leaves memory unchanged. Writers are
+// serialized by writeMu; readers keep serving the previous snapshot while the
+// file is being encoded and written.
 func (s *Store) commit(mutate func([]model.Project) ([]model.Project, error)) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+
+	s.mu.RLock()
 	next := cloneProjects(s.projects)
+	s.mu.RUnlock()
+
 	next, err := mutate(next)
 	if err != nil {
 		return err
@@ -115,7 +128,10 @@ func (s *Store) commit(mutate func([]model.Project) ([]model.Project, error)) er
 	if err := s.saveProjects(next); err != nil {
 		return err
 	}
+
+	s.mu.Lock()
 	s.projects = next
+	s.mu.Unlock()
 	return nil
 }
 
@@ -257,8 +273,6 @@ func (s *Store) AddProject(p model.Project) (model.Project, error) {
 	if err := p.Proxy.Validate(); err != nil {
 		return p, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if p.ID == "" {
 		p.ID = NewID()
 	}
@@ -277,8 +291,6 @@ func (s *Store) UpdateProject(p model.Project) error {
 	if err := p.Proxy.Validate(); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		i := indexOfProject(list, p.ID)
 		if i < 0 {
@@ -295,8 +307,6 @@ func (s *Store) UpdateProjectProxy(id string, proxy *model.ProxySettings) error 
 	if err := proxy.Validate(); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		i := indexOfProject(list, id)
 		if i < 0 {
@@ -314,8 +324,6 @@ func (s *Store) UpdateProjectProxy(id string, proxy *model.ProxySettings) error 
 
 // RenameProject updates only a project's name.
 func (s *Store) RenameProject(id, name string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		i := indexOfProject(list, id)
 		if i < 0 {
@@ -328,8 +336,6 @@ func (s *Store) RenameProject(id, name string) error {
 
 // DeleteProject removes a project by id.
 func (s *Store) DeleteProject(id string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		i := indexOfProject(list, id)
 		if i < 0 {
@@ -343,8 +349,6 @@ func (s *Store) DeleteProject(id string) error {
 
 // AddService appends a service to a project.
 func (s *Store) AddService(projectID string, svc model.Service) (model.Service, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if svc.ID == "" {
 		svc.ID = NewID()
 	}
@@ -364,8 +368,6 @@ func (s *Store) AddService(projectID string, svc model.Service) (model.Service, 
 
 // DeleteService removes a service from a project.
 func (s *Store) DeleteService(projectID, serviceID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		pi, si, ok := locateService(list, projectID, serviceID)
 		if !ok {
@@ -378,8 +380,6 @@ func (s *Store) DeleteService(projectID, serviceID string) error {
 
 // AddOperation appends an operation to a service.
 func (s *Store) AddOperation(projectID, serviceID string, op model.Operation) (model.Operation, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	assignOperationIDs(&op)
 	err := s.commit(func(list []model.Project) ([]model.Project, error) {
 		pi, si, ok := locateService(list, projectID, serviceID)
@@ -394,8 +394,6 @@ func (s *Store) AddOperation(projectID, serviceID string, op model.Operation) (m
 
 // DeleteOperation removes an operation from a service.
 func (s *Store) DeleteOperation(projectID, serviceID, opID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
 		if !ok {
@@ -409,8 +407,6 @@ func (s *Store) DeleteOperation(projectID, serviceID, opID string) error {
 
 // AddCall appends a request sample (call) to an operation.
 func (s *Store) AddCall(projectID, serviceID, opID string, call model.Call) (model.Call, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if call.ID == "" {
 		call.ID = NewID()
 	}
@@ -442,8 +438,6 @@ func (s *Store) AddCall(projectID, serviceID, opID string, call model.Call) (mod
 
 // UpdateCall replaces a call (by id) within an operation.
 func (s *Store) UpdateCall(projectID, serviceID, opID string, call model.Call) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
 		if !ok {
@@ -462,8 +456,6 @@ func (s *Store) UpdateCall(projectID, serviceID, opID string, call model.Call) e
 
 // DeleteCall removes a call from an operation.
 func (s *Store) DeleteCall(projectID, serviceID, opID, callID string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
 		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
 		if !ok {

@@ -388,6 +388,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .tree-node:hover { background: var(--border-soft); }
 .tree-node.selected { background: var(--accent-soft); color: var(--sel-text); }
 .tree-node.proj { font-weight: 600; }
+/* Collapsed subtrees stay in the DOM; toggling only flips this class. */
+.tree-node.is-hidden { display: none; }
 /* Tree rows are focusable (roving tabindex); the global :focus-visible rule
    does not apply to them because they are divs, so they need their own. */
 .tree-node:focus-visible {

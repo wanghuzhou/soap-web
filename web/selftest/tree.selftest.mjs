@@ -110,7 +110,7 @@ globalThis.prompt = (msg, def) => def;
 // ---------- run the real modules ----------
 const base = new URL('../assets/js/', import.meta.url);
 const { state, initCollapsed, saveCollapsed } = await import(new URL('state.js', base).href);
-const { renderTree, syncSelection } = await import(new URL('tree.js', base).href);
+const { renderTree, syncSelection, toggleNode } = await import(new URL('tree.js', base).href);
 
 let failures = 0;
 let checks = 0;
@@ -224,6 +224,23 @@ initCollapsed('w3');
 check('旧版全局折叠状态被迁移', state.collapsed.legacy === true
   && localStorage.store['soap-web-collapsed'] === undefined,
   JSON.stringify(state.collapsed));
+
+// ---- collapsing changes visibility without rebuilding the tree ----
+state.collapsed = {};
+state.projects = fixture(1);
+renderTree();
+const beforeCollapse = getEl('tree').innerHTML;
+toggleNode('p1');
+rows = getEl('tree').children;
+check('折叠后后代行隐藏',
+  rows.filter((r) => r.dataset.kind !== 'proj').every((r) => r.classes.has('is-hidden')),
+  JSON.stringify(rows.map((r) => [r.dataset.kind, r.classes.has('is-hidden')])));
+check('折叠不重建树', getEl('tree').innerHTML === beforeCollapse);
+toggleNode('p1');
+check('展开后后代行恢复',
+  getEl('tree').children
+    .filter((r) => r.dataset.kind !== 'proj')
+    .every((r) => !r.classes.has('is-hidden')));
 
 // ---- report ----
 if (failures === 0) {

@@ -132,6 +132,10 @@ func SeedCall(op *Operation) (Call, bool) {
 
 // TestSuite / TestCase / TestStep mirror SoapUI's hierarchy. A TestStep that
 // carries a request can be replayed directly without WSDL parsing.
+//
+// These types are pass-through only: they are read from and written back to
+// SoapUI projects so no data is lost, but the UI neither displays nor executes
+// them.
 type TestSuite struct {
 	Name      string     `json:"name"`
 	TestCases []TestCase `json:"testCases"`
