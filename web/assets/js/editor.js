@@ -111,6 +111,14 @@ export function isDirty() {
   return !!textarea && textarea.value !== loadedSnapshot;
 }
 
+// markSaved makes the current editor content the saved baseline. Without it,
+// isDirty() stays true after a successful save and the workspace switcher keeps
+// warning about "unsaved changes".
+function markSaved() {
+  const textarea = $('requestBody');
+  loadedSnapshot = textarea ? textarea.value : '';
+}
+
 // isSending reports whether a request is currently in flight.
 export function isSending() {
   return sending;
@@ -435,6 +443,7 @@ async function saveCurrentCall() {
     toast('请先选择一个请求样例', true);
     return;
   }
+  if (saving) return;
   const body = {
     id: selected.ids.cid,
     title: selected.node.title || '请求',
@@ -442,19 +451,28 @@ async function saveCurrentCall() {
     action: $('soapAction').value.trim(),
     request: $('requestBody').value,
   };
+  saving = true;
+  updateEditButtons();
   try {
     await apiJSON('PUT', callURL(selected.ids), body);
+    // The write succeeded: the editor content is now the saved baseline.
+    markSaved();
     await reloadHandler();
     toast('已保存');
   } catch (error) {
     toast('保存失败: ' + error.message, true);
+  } finally {
+    saving = false;
+    updateEditButtons();
   }
 }
 
 async function deleteCurrentNode() {
   const selected = state.selected;
-  if (!selected) return;
+  if (!selected || saving) return;
   const ids = selected.ids;
+  saving = true;
+  updateEditButtons();
   try {
     if (selected.kind === 'call') {
       if (!confirm('确定删除该请求样例？')) return;
@@ -476,5 +494,8 @@ async function deleteCurrentNode() {
     toast('已删除');
   } catch (error) {
     toast(error.message, true);
+  } finally {
+    saving = false;
+    updateEditButtons();
   }
 }

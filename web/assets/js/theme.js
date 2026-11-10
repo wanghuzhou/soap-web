@@ -2,8 +2,9 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
+import { STORAGE_KEY } from './constants.js';
 
-const THEME_KEY = 'soap-web-theme';
+const THEME_KEY = STORAGE_KEY.THEME;
 
 function hasSavedTheme() {
   try { return localStorage.getItem(THEME_KEY) !== null; } catch (e) { return false; }

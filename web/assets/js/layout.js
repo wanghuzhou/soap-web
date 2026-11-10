@@ -3,9 +3,8 @@
 // right pane off-screen. Below 1100px CSS switches to a stacked layout.
 
 import { $ } from './dom.js';
+import { STORAGE_KEY } from './constants.js';
 
-const STORAGE_KEY = 'soap-web-cols-v2';
-const LEGACY_KEY = 'soap-web-cols';
 const BREAKPOINT_QUERY = '(min-width: 1101px)';
 const MIN_LEFT = 200;
 const MIN_MID = 340;
@@ -21,7 +20,8 @@ function clamp(value, min, max) {
 
 function readSaved() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem(LEGACY_KEY);
+    const raw = localStorage.getItem(STORAGE_KEY.COLUMNS)
+      || localStorage.getItem(STORAGE_KEY.LEGACY_COLUMNS);
     if (!raw) return null;
     const saved = JSON.parse(raw);
     const left = Number(saved.left);
@@ -70,7 +70,7 @@ export function initLayout() {
     const leftWidth = Math.round(leftPane.getBoundingClientRect().width);
     const midWidth = Math.round(midPane.getBoundingClientRect().width);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ left: leftWidth, mid: midWidth }));
+      localStorage.setItem(STORAGE_KEY.COLUMNS, JSON.stringify({ left: leftWidth, mid: midWidth }));
     } catch (error) { /* storage may be unavailable */ }
   }
 

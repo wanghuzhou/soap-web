@@ -254,54 +254,35 @@ func (r *Registry) validate() error {
 func (r *Registry) activateInitial() error {
 	wanted := r.settings.Current
 	wantedName := wanted
-	order := make([]int, 0, len(r.settings.Workspaces))
-	current := r.indexOfLocked(wanted)
-	if current >= 0 {
-		wantedName = r.settings.Workspaces[current].Name
-		order = append(order, current)
+	order := make([]entry, 0, len(r.settings.Workspaces))
+	if i := r.indexOfLocked(wanted); i >= 0 {
+		wantedName = r.settings.Workspaces[i].Name
+		order = append(order, r.settings.Workspaces[i])
 	}
-	for i := range r.settings.Workspaces {
-		if i != current {
-			order = append(order, i)
+	for _, w := range r.settings.Workspaces {
+		if w.ID != wanted {
+			order = append(order, w)
 		}
 	}
 
-	var firstErr error
-	for _, i := range order {
-		w := r.settings.Workspaces[i]
-		p, err := r.absPath(w.File)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			log.Printf("工作空间「%s」路径无效：%v", w.Name, err)
-			continue
-		}
-		st, err := store.New(p)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			log.Printf("工作空间「%s」加载失败：%v", w.Name, err)
-			continue
-		}
-		if r.settings.Current != w.ID {
-			next := r.settings
-			next.Current = w.ID
-			if err := r.saveSettings(next); err != nil {
-				log.Printf("保存当前工作空间失败：%v", err)
-			}
-			r.settings = next
-			log.Printf("工作空间「%s」不可用，已切换到「%s」", wantedName, w.Name)
-		}
-		r.active = st
-		r.activeID = w.ID
-		return nil
+	w, st, err := r.openFirstStore(order, func(w entry, err error) {
+		log.Printf("工作空间「%s」加载失败：%v", w.Name, err)
+	})
+	if err != nil {
+		return fmt.Errorf("没有可用的工作空间: %w", err)
 	}
-	if firstErr == nil {
-		firstErr = errors.New("没有可用的工作空间文件")
+	if r.settings.Current != w.ID {
+		next := r.settings
+		next.Current = w.ID
+		if err := r.saveSettings(next); err != nil {
+			log.Printf("保存当前工作空间失败：%v", err)
+		}
+		r.settings = next
+		log.Printf("工作空间「%s」不可用，已切换到「%s」", wantedName, w.Name)
 	}
-	return fmt.Errorf("没有可用的工作空间: %w", firstErr)
+	r.active = st
+	r.activeID = w.ID
+	return nil
 }
 
 // Active returns the current store and its public info.
@@ -533,12 +514,26 @@ func (r *Registry) Delete(id string) error {
 
 // loadFallbackLocked opens the first workspace in list that loads.
 func (r *Registry) loadFallbackLocked(list []entry) (string, *store.Store, error) {
+	w, st, err := r.openFirstStore(list, nil)
+	if err != nil {
+		return "", nil, err
+	}
+	return w.ID, st, nil
+}
+
+// openFirstStore tries each entry in order and returns the first workspace that
+// loads. Skipped entries are reported through onSkip (may be nil); when none
+// load, the first failure is returned.
+func (r *Registry) openFirstStore(entries []entry, onSkip func(entry, error)) (entry, *store.Store, error) {
 	var firstErr error
-	for _, w := range list {
+	for _, w := range entries {
 		p, err := r.absPath(w.File)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
+			}
+			if onSkip != nil {
+				onSkip(w, err)
 			}
 			continue
 		}
@@ -547,14 +542,17 @@ func (r *Registry) loadFallbackLocked(list []entry) (string, *store.Store, error
 			if firstErr == nil {
 				firstErr = err
 			}
+			if onSkip != nil {
+				onSkip(w, err)
+			}
 			continue
 		}
-		return w.ID, st, nil
+		return w, st, nil
 	}
 	if firstErr == nil {
 		firstErr = errors.New("没有可用的工作空间")
 	}
-	return "", nil, firstErr
+	return entry{}, nil, firstErr
 }
 
 // moveToTrash renames a workspace file into data/trash. It reports whether a

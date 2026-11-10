@@ -150,39 +150,14 @@ func (idx *schemaIndex) buildRequest(rootElem, targetNS string) (string, string)
 	return b.String(), prefix
 }
 
-// writeRoot writes the root element, declaring xmlns:<prefix> inline when a
-// namespace is present.
+// writeRoot writes the request's root element, declaring xmlns:<prefix> inline
+// when a namespace is present.
 func (idx *schemaIndex) writeRoot(b *strings.Builder, el xsElement, qname, prefix, targetNS string, qualified bool, depth int) {
-	indent := strings.Repeat("  ", depth)
 	nsDecl := ""
 	if prefix != "" && targetNS != "" {
 		nsDecl = fmt.Sprintf(` xmlns:%s="%s"`, prefix, targetNS)
 	}
-	ct := el.Complex
-	typeName := localName(el.Type)
-	if ct == nil && typeName != "" {
-		if t, ok := idx.types[typeName]; ok {
-			ct = &t
-		}
-	}
-	if ct == nil {
-		b.WriteString(fmt.Sprintf("%s<%s%s>%s</%s>\n", indent, qname, nsDecl, sampleValue(typeName, el.Simple), qname))
-		return
-	}
-	children, attrs := idx.collectMembers(ct, 0)
-	attrStr := ""
-	for _, a := range attrs {
-		attrStr += fmt.Sprintf(` %s=""`, a)
-	}
-	if len(children) == 0 && len(attrs) == 0 {
-		b.WriteString(fmt.Sprintf("%s<%s%s/>\n", indent, qname, nsDecl))
-		return
-	}
-	b.WriteString(fmt.Sprintf("%s<%s%s%s>\n", indent, qname, nsDecl, attrStr))
-	for _, ch := range children {
-		idx.writeChild(b, ch, prefix, qualified, depth+1)
-	}
-	b.WriteString(fmt.Sprintf("%s</%s>\n", indent, qname))
+	idx.writeElement(b, el, qname, nsDecl, prefix, qualified, depth)
 }
 
 // writeChild writes a descendant element. When the schema is qualified the
@@ -196,6 +171,12 @@ func (idx *schemaIndex) writeChild(b *strings.Builder, el xsElement, prefix stri
 	if qualified && prefix != "" {
 		name = prefix + ":" + local
 	}
+	idx.writeElement(b, el, name, "", prefix, qualified, depth)
+}
+
+// writeElement emits one element and its subtree. name is the qualified name to
+// write and nsDecl is an optional inline namespace declaration (root only).
+func (idx *schemaIndex) writeElement(b *strings.Builder, el xsElement, name, nsDecl, prefix string, qualified bool, depth int) {
 	indent := strings.Repeat("  ", depth)
 	ct := el.Complex
 	typeName := localName(el.Type)
@@ -205,7 +186,7 @@ func (idx *schemaIndex) writeChild(b *strings.Builder, el xsElement, prefix stri
 		}
 	}
 	if ct == nil {
-		b.WriteString(fmt.Sprintf("%s<%s>%s</%s>\n", indent, name, sampleValue(typeName, el.Simple), name))
+		b.WriteString(fmt.Sprintf("%s<%s%s>%s</%s>\n", indent, name, nsDecl, sampleValue(typeName, el.Simple), name))
 		return
 	}
 	children, attrs := idx.collectMembers(ct, 0)
@@ -214,10 +195,10 @@ func (idx *schemaIndex) writeChild(b *strings.Builder, el xsElement, prefix stri
 		attrStr += fmt.Sprintf(` %s=""`, a)
 	}
 	if len(children) == 0 && len(attrs) == 0 {
-		b.WriteString(fmt.Sprintf("%s<%s%s/>\n", indent, name, attrStr))
+		b.WriteString(fmt.Sprintf("%s<%s%s/>\n", indent, name, nsDecl))
 		return
 	}
-	b.WriteString(fmt.Sprintf("%s<%s%s>\n", indent, name, attrStr))
+	b.WriteString(fmt.Sprintf("%s<%s%s%s>\n", indent, name, nsDecl, attrStr))
 	for _, ch := range children {
 		idx.writeChild(b, ch, prefix, qualified, depth+1)
 	}

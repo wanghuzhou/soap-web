@@ -79,24 +79,12 @@ func backfillWSDLCalls(projects []model.Project) bool {
 				if len(op.Calls) > 0 {
 					continue
 				}
-				body := op.Template
-				if body == "" {
-					body = op.Request
-				}
-				if body == "" {
+				call, ok := model.SeedCall(op)
+				if !ok {
 					continue
 				}
-				title := op.Name
-				if title == "" {
-					title = "请求"
-				}
-				op.Calls = []model.Call{{
-					ID:       NewID(),
-					Title:    title,
-					Endpoint: op.Endpoint,
-					Action:   op.SoapAction,
-					Request:  body,
-				}}
+				call.ID = NewID()
+				op.Calls = []model.Call{call}
 				changed = true
 			}
 		}
@@ -212,6 +200,35 @@ func indexOfProject(list []model.Project, id string) int {
 	return -1
 }
 
+// locateService returns the indexes of a service within a project. Callers hold
+// the store lock; ok=false means the project or service does not exist.
+func locateService(list []model.Project, projectID, serviceID string) (pi, si int, ok bool) {
+	pi = indexOfProject(list, projectID)
+	if pi < 0 {
+		return 0, 0, false
+	}
+	for si = range list[pi].Services {
+		if list[pi].Services[si].ID == serviceID {
+			return pi, si, true
+		}
+	}
+	return 0, 0, false
+}
+
+// locateOperation returns the indexes of an operation within a service.
+func locateOperation(list []model.Project, projectID, serviceID, opID string) (pi, si, oi int, ok bool) {
+	pi, si, ok = locateService(list, projectID, serviceID)
+	if !ok {
+		return 0, 0, 0, false
+	}
+	for oi = range list[pi].Services[si].Operations {
+		if list[pi].Services[si].Operations[oi].ID == opID {
+			return pi, si, oi, true
+		}
+	}
+	return 0, 0, 0, false
+}
+
 // List returns a deep copy of all projects. An empty store returns [] rather
 // than null, since "no projects yet" is a normal state.
 func (s *Store) List() []model.Project {
@@ -227,10 +244,8 @@ func (s *Store) List() []model.Project {
 func (s *Store) Get(id string) (model.Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	for _, p := range s.projects {
-		if p.ID == id {
-			return cloneProject(p), nil
-		}
+	if i := indexOfProject(s.projects, id); i >= 0 {
+		return cloneProject(s.projects[i]), nil
 	}
 	return model.Project{}, ErrNotFound
 }
@@ -352,17 +367,12 @@ func (s *Store) DeleteService(projectID, serviceID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
-		pi := indexOfProject(list, projectID)
-		if pi < 0 {
+		pi, si, ok := locateService(list, projectID, serviceID)
+		if !ok {
 			return nil, ErrNotFound
 		}
-		for i := range list[pi].Services {
-			if list[pi].Services[i].ID == serviceID {
-				list[pi].Services = append(list[pi].Services[:i], list[pi].Services[i+1:]...)
-				return list, nil
-			}
-		}
-		return nil, ErrNotFound
+		list[pi].Services = append(list[pi].Services[:si], list[pi].Services[si+1:]...)
+		return list, nil
 	})
 }
 
@@ -372,18 +382,12 @@ func (s *Store) AddOperation(projectID, serviceID string, op model.Operation) (m
 	defer s.mu.Unlock()
 	assignOperationIDs(&op)
 	err := s.commit(func(list []model.Project) ([]model.Project, error) {
-		pi := indexOfProject(list, projectID)
-		if pi < 0 {
+		pi, si, ok := locateService(list, projectID, serviceID)
+		if !ok {
 			return nil, ErrNotFound
 		}
-		for si := range list[pi].Services {
-			if list[pi].Services[si].ID != serviceID {
-				continue
-			}
-			list[pi].Services[si].Operations = append(list[pi].Services[si].Operations, cloneOperation(op))
-			return list, nil
-		}
-		return nil, ErrNotFound
+		list[pi].Services[si].Operations = append(list[pi].Services[si].Operations, cloneOperation(op))
+		return list, nil
 	})
 	return op, err
 }
@@ -393,23 +397,13 @@ func (s *Store) DeleteOperation(projectID, serviceID, opID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
-		pi := indexOfProject(list, projectID)
-		if pi < 0 {
+		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
+		if !ok {
 			return nil, ErrNotFound
 		}
-		for si := range list[pi].Services {
-			svc := &list[pi].Services[si]
-			if svc.ID != serviceID {
-				continue
-			}
-			for oi := range svc.Operations {
-				if svc.Operations[oi].ID == opID {
-					svc.Operations = append(svc.Operations[:oi], svc.Operations[oi+1:]...)
-					return list, nil
-				}
-			}
-		}
-		return nil, ErrNotFound
+		svc := &list[pi].Services[si]
+		svc.Operations = append(svc.Operations[:oi], svc.Operations[oi+1:]...)
+		return list, nil
 	})
 }
 
@@ -424,43 +418,24 @@ func (s *Store) AddCall(projectID, serviceID, opID string, call model.Call) (mod
 		call.Title = "新请求 " + time.Now().Format("15:04:05")
 	}
 	err := s.commit(func(list []model.Project) ([]model.Project, error) {
-		pi := indexOfProject(list, projectID)
-		if pi < 0 {
+		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
+		if !ok {
 			return nil, ErrNotFound
 		}
-		for si := range list[pi].Services {
-			svc := &list[pi].Services[si]
-			if svc.ID != serviceID {
-				continue
-			}
-			for oi := range svc.Operations {
-				op := &svc.Operations[oi]
-				if op.ID != opID {
-					continue
-				}
-				// Seed the new request from the operation's structural template
-				// (方案 A: pure skeleton from WSDL, no business data). Fall back
-				// to op.Request only when no Template exists.
-				if call.Request == "" {
-					call.Request = op.Template
-					if call.Request == "" {
-						call.Request = op.Request
-					}
-					if call.Request == "" && len(op.Calls) > 0 {
-						call.Request = op.Calls[0].Request
-					}
-				}
-				if call.Endpoint == "" {
-					call.Endpoint = op.Endpoint
-				}
-				if call.Action == "" {
-					call.Action = op.SoapAction
-				}
-				op.Calls = append(op.Calls, call)
-				return list, nil
-			}
+		op := &list[pi].Services[si].Operations[oi]
+		// Seed the new request from the operation's structural template
+		// (方案 A: pure skeleton from WSDL, no business data).
+		if call.Request == "" {
+			call.Request = op.DefaultRequestBody()
 		}
-		return nil, ErrNotFound
+		if call.Endpoint == "" {
+			call.Endpoint = op.Endpoint
+		}
+		if call.Action == "" {
+			call.Action = op.SoapAction
+		}
+		op.Calls = append(op.Calls, call)
+		return list, nil
 	})
 	return call, err
 }
@@ -470,27 +445,15 @@ func (s *Store) UpdateCall(projectID, serviceID, opID string, call model.Call) e
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
-		pi := indexOfProject(list, projectID)
-		if pi < 0 {
+		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
+		if !ok {
 			return nil, ErrNotFound
 		}
-		for si := range list[pi].Services {
-			svc := &list[pi].Services[si]
-			if svc.ID != serviceID {
-				continue
-			}
-			for oi := range svc.Operations {
-				op := &svc.Operations[oi]
-				if op.ID != opID {
-					continue
-				}
-				for ci := range op.Calls {
-					if op.Calls[ci].ID == call.ID {
-						op.Calls[ci] = call
-						return list, nil
-					}
-				}
-				return nil, ErrNotFound
+		op := &list[pi].Services[si].Operations[oi]
+		for ci := range op.Calls {
+			if op.Calls[ci].ID == call.ID {
+				op.Calls[ci] = call
+				return list, nil
 			}
 		}
 		return nil, ErrNotFound
@@ -502,27 +465,15 @@ func (s *Store) DeleteCall(projectID, serviceID, opID, callID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.commit(func(list []model.Project) ([]model.Project, error) {
-		pi := indexOfProject(list, projectID)
-		if pi < 0 {
+		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
+		if !ok {
 			return nil, ErrNotFound
 		}
-		for si := range list[pi].Services {
-			svc := &list[pi].Services[si]
-			if svc.ID != serviceID {
-				continue
-			}
-			for oi := range svc.Operations {
-				op := &svc.Operations[oi]
-				if op.ID != opID {
-					continue
-				}
-				for ci := range op.Calls {
-					if op.Calls[ci].ID == callID {
-						op.Calls = append(op.Calls[:ci], op.Calls[ci+1:]...)
-						return list, nil
-					}
-				}
-				return nil, ErrNotFound
+		op := &list[pi].Services[si].Operations[oi]
+		for ci := range op.Calls {
+			if op.Calls[ci].ID == callID {
+				op.Calls = append(op.Calls[:ci], op.Calls[ci+1:]...)
+				return list, nil
 			}
 		}
 		return nil, ErrNotFound

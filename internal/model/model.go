@@ -93,6 +93,43 @@ type Call struct {
 	Request  string `json:"request"` // raw XML body
 }
 
+// DefaultRequestBody returns the body a new request sample should start from:
+// the operation's structural template, then its generated request, then the
+// first saved call. Keeping the order here means seeding a call behaves the
+// same everywhere instead of each caller re-implementing the fallback chain.
+func (op *Operation) DefaultRequestBody() string {
+	if op.Template != "" {
+		return op.Template
+	}
+	if op.Request != "" {
+		return op.Request
+	}
+	if len(op.Calls) > 0 {
+		return op.Calls[0].Request
+	}
+	return ""
+}
+
+// SeedCall builds an operation's default request sample from its structural
+// template. It reports false when no body can be derived, so callers can skip
+// operations that would otherwise save an empty call.
+func SeedCall(op *Operation) (Call, bool) {
+	body := op.DefaultRequestBody()
+	if body == "" {
+		return Call{}, false
+	}
+	title := op.Name
+	if title == "" {
+		title = "请求"
+	}
+	return Call{
+		Title:    title,
+		Endpoint: op.Endpoint,
+		Action:   op.SoapAction,
+		Request:  body,
+	}, true
+}
+
 // TestSuite / TestCase / TestStep mirror SoapUI's hierarchy. A TestStep that
 // carries a request can be replayed directly without WSDL parsing.
 type TestSuite struct {

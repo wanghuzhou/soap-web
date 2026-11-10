@@ -135,16 +135,15 @@ func storeFrom(r *http.Request) *store.Store {
 func staticHandler(fs http.FileSystem) http.Handler {
 	fileServer := http.FileServer(fs)
 	var (
-		mu     sync.Mutex
-		etags  = map[string]string{}
-		hashes = map[string]string{}
+		mu    sync.Mutex
+		etags = map[string]string{}
 	)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Defence in depth against content sniffing.
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-cache")
 
-		if etag := etagFor(fs, r.URL.Path, &mu, etags, hashes); etag != "" {
+		if etag := etagFor(fs, r.URL.Path, &mu, etags); etag != "" {
 			w.Header().Set("ETag", etag)
 			if match := r.Header.Get("If-None-Match"); match != "" && etagMatches(match, etag) {
 				w.WriteHeader(http.StatusNotModified)
@@ -157,7 +156,7 @@ func staticHandler(fs http.FileSystem) http.Handler {
 
 // etagFor returns a strong ETag for the requested asset, or "" if it cannot be
 // resolved (the FileServer will then produce its own 404).
-func etagFor(fs http.FileSystem, urlPath string, mu *sync.Mutex, etags, hashes map[string]string) string {
+func etagFor(fs http.FileSystem, urlPath string, mu *sync.Mutex, etags map[string]string) string {
 	path := urlPath
 	if path == "" || path == "/" {
 		path = "/index.html"
@@ -188,7 +187,6 @@ func etagFor(fs http.FileSystem, urlPath string, mu *sync.Mutex, etags, hashes m
 
 	mu.Lock()
 	etags[path] = tag
-	hashes[path] = tag
 	mu.Unlock()
 	return tag
 }
@@ -423,21 +421,8 @@ func (s *Server) persistWSDLProject(st *store.Store, service *wsdl.Result, fallb
 			op.Template = op.Request
 		}
 		if len(op.Calls) == 0 {
-			body := op.Template
-			if body == "" {
-				body = op.Request
-			}
-			if body != "" {
-				title := op.Name
-				if title == "" {
-					title = "请求"
-				}
-				op.Calls = []model.Call{{
-					Title:    title,
-					Endpoint: op.Endpoint,
-					Action:   op.SoapAction,
-					Request:  body,
-				}}
+			if call, ok := model.SeedCall(op); ok {
+				op.Calls = []model.Call{call}
 			}
 		}
 	}
