@@ -51,6 +51,12 @@ export function initEditor({ reload }) {
       event.preventDefault();
       send();
     }
+    // Ctrl/Cmd+S saves the current request sample, mirroring the 保存请求
+    // button. preventDefault stops the browser's "save page" dialog.
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+      event.preventDefault();
+      saveCurrentCall();
+    }
     if ((event.ctrlKey || event.metaKey) && event.shiftKey && (event.key === 'F' || event.key === 'f')) {
       event.preventDefault();
       formatBody();
