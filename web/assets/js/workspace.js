@@ -4,16 +4,16 @@
 
 import { $, escapeHtml, escapeAttr } from './dom.js';
 import { state } from './state.js';
-import { apiGet, apiJSON, setWorkspaceID, setWorkspaceMismatchHandler } from './api.js';
+import { apiGet, apiJSON, path, setWorkspaceID, setWorkspaceMismatchHandler, workspacePath } from './api.js';
 import { isDirty, isSending } from './editor.js';
-import { placeMenu } from './popover.js';
+import { openPopover } from './popover.js';
 import { toast } from './toast.js';
 
 let onEnter = async () => {};
 let onExport = () => {};
 let onImport = () => {};
 let menuOpen = false;
-let cleanupMenu = null;
+let closeMenuFn = null;
 
 // initWorkspace wires the top-bar control. onEnter is called after the active
 // workspace changes; the app uses it to reset the editor and reload projects.
@@ -41,7 +41,7 @@ export function initWorkspace(options = {}) {
 
 // loadWorkspaceInfo fetches the workspace list and applies it.
 export async function loadWorkspaceInfo() {
-  const payload = await apiGet('/api/workspaces');
+  const payload = await apiGet(path('workspaces'));
   applyWorkspace(payload);
   return payload;
 }
@@ -63,7 +63,7 @@ export function handleServerWorkspace(info) {
 // recoverWorkspace finishes a boot that could not reach the backend.
 async function recoverWorkspace() {
   try {
-    const payload = await apiGet('/api/workspaces');
+    const payload = await apiGet(path('workspaces'));
     applyWorkspace(payload);
     await enterWorkspace();
     toast('已连接，当前工作空间：' + state.workspaceName);
@@ -105,7 +105,7 @@ async function syncNow(auto, expectedName) {
     return;
   }
   try {
-    const payload = await apiGet('/api/workspaces');
+    const payload = await apiGet(path('workspaces'));
     applyWorkspace(payload);
     await enterWorkspace();
     const name = state.workspaceName || expectedName || '';
@@ -126,7 +126,7 @@ async function switchTo(id) {
     return;
   }
   try {
-    const payload = await apiJSON('POST', '/api/workspaces/switch', { id });
+    const payload = await apiJSON('POST', path('workspaces', 'switch'), { id });
     applyWorkspace(payload);
     await enterWorkspace();
     toast('已切换到工作空间：' + state.workspaceName);
@@ -143,7 +143,7 @@ async function createWorkspace() {
   const name = prompt('新工作空间名称：', suggested);
   if (name == null) return;
   try {
-    const payload = await apiJSON('POST', '/api/workspaces', { name });
+    const payload = await apiJSON('POST', path('workspaces'), { name });
     applyWorkspace(payload);
     await enterWorkspace();
     toast('已创建工作空间：' + state.workspaceName);
@@ -157,7 +157,7 @@ async function renameWorkspace() {
   const name = prompt('重命名工作空间：', current);
   if (name == null || name.trim() === current) return;
   try {
-    const payload = await apiJSON('PATCH', '/api/workspaces/' + encodeURIComponent(state.workspaceId), { name });
+    const payload = await apiJSON('PATCH', workspacePath(state.workspaceId), { name });
     applyWorkspace(payload);
     toast('已重命名为：' + state.workspaceName);
   } catch (error) {
@@ -176,7 +176,7 @@ async function deleteWorkspace() {
     return;
   }
   try {
-    const payload = await apiJSON('DELETE', '/api/workspaces/' + encodeURIComponent(state.workspaceId));
+    const payload = await apiJSON('DELETE', workspacePath(state.workspaceId));
     applyWorkspace(payload);
     await enterWorkspace();
     toast('已删除工作空间：' + name);
@@ -245,67 +245,18 @@ function openMenu() {
   const button = $('workspaceBtn');
   if (!menu || !button) return;
   renderMenu();
-  menu.classList.remove('hidden');
-  button.setAttribute('aria-expanded', 'true');
-  placeMenu(menu, button, 'left');
+  closeMenuFn = openPopover({
+    menu,
+    anchor: button,
+    align: 'left',
+    onClose: () => {
+      menuOpen = false;
+      closeMenuFn = null;
+    },
+  });
   menuOpen = true;
-
-  const onPointerDown = (event) => {
-    if (menu.contains(event.target) || button.contains(event.target)) return;
-    closeMenu();
-  };
-  const onKeyDown = (event) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      closeMenu();
-      button.focus();
-      return;
-    }
-    const items = Array.from(menu.querySelectorAll('.row-menu-item:not(:disabled)'));
-    if (!items.length) return;
-    const index = items.indexOf(document.activeElement);
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      items[(index + 1) % items.length].focus();
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      items[(index - 1 + items.length) % items.length].focus();
-    } else if (event.key === 'Tab') {
-      closeMenu();
-    }
-  };
-  const onViewportChange = () => closeMenu();
-
-  document.addEventListener('pointerdown', onPointerDown, true);
-  document.addEventListener('keydown', onKeyDown, true);
-  window.addEventListener('resize', onViewportChange);
-  window.addEventListener('blur', onViewportChange);
-  window.addEventListener('scroll', onViewportChange, true);
-
-  cleanupMenu = () => {
-    document.removeEventListener('pointerdown', onPointerDown, true);
-    document.removeEventListener('keydown', onKeyDown, true);
-    window.removeEventListener('resize', onViewportChange);
-    window.removeEventListener('blur', onViewportChange);
-    window.removeEventListener('scroll', onViewportChange, true);
-  };
-
-  const first = menu.querySelector('.row-menu-item');
-  if (first) first.focus();
 }
 
 function closeMenu() {
-  if (!menuOpen) return;
-  menuOpen = false;
-  if (cleanupMenu) {
-    cleanupMenu();
-    cleanupMenu = null;
-  }
-  const menu = $('workspaceMenu');
-  const button = $('workspaceBtn');
-  if (menu) {
-    menu.classList.add('hidden');
-    menu.innerHTML = '';
-  }
-  if (button) button.setAttribute('aria-expanded', 'false');
+  if (closeMenuFn) closeMenuFn();
 }

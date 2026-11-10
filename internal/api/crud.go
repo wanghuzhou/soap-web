@@ -25,6 +25,7 @@ func (s *Server) registerProjectRoutes(mux *http.ServeMux) {
 	// Narrow writes: avoid replacing the whole project tree for a one-field
 	// change, which would clobber concurrent edits made in another tab.
 	mux.HandleFunc("PUT /api/projects/{pid}/proxy", s.handleUpdateProjectProxy)
+	mux.HandleFunc("PUT /api/projects/{pid}/name", s.handleRenameProject)
 
 	mux.HandleFunc("POST /api/projects/{pid}/services", s.handleAddService)
 	mux.HandleFunc("DELETE /api/projects/{pid}/services/{sid}", s.handleDeleteService)
@@ -109,6 +110,29 @@ func (s *Server) handleUpdateProjectProxy(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "proxy": proxy})
+}
+
+type renameProjectRequest struct {
+	Name string `json:"name"`
+}
+
+// handleRenameProject updates only a project's name, so a rename cannot
+// overwrite edits another tab made to the rest of the project.
+func (s *Server) handleRenameProject(w http.ResponseWriter, r *http.Request) {
+	req, ok := decodeJSON[renameProjectRequest](w, r)
+	if !ok {
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		writeErr(w, http.StatusBadRequest, "工程名称不能为空")
+		return
+	}
+	if err := storeFrom(r).RenameProject(r.PathValue("pid"), name); err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": r.PathValue("pid"), "name": name})
 }
 
 // handleExportProject serialises a project as SoapUI-compatible XML for download.

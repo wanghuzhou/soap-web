@@ -1,30 +1,14 @@
 // Body-level popover menu for tree rows, so the scrolling tree cannot clip it.
 
 import { $, escapeHtml } from './dom.js';
-import { placeMenu } from './popover.js';
+import { openPopover } from './popover.js';
 
 const MENU_ID = 'rowMenu';
 
-let current = null; // { anchor, items, onSelect, cleanup }
+let current = null; // { anchor, close }
 
 export function closeRowMenu() {
-  if (!current) return;
-  const { anchor, cleanup } = current;
-  current = null;
-  cleanup();
-
-  const menu = $(MENU_ID);
-  if (menu) {
-    menu.classList.add('hidden');
-    menu.innerHTML = '';
-  }
-  if (anchor && anchor.isConnected) {
-    anchor.setAttribute('aria-expanded', 'false');
-    // Without this the row's hover-only action buttons would disappear while
-    // the trigger still holds focus.
-    const row = anchor.closest('.tree-node');
-    if (row) row.classList.remove('menu-open');
-  }
+  if (current) current.close();
 }
 
 export function openRowMenu({ anchor, items, onSelect }) {
@@ -44,55 +28,21 @@ export function openRowMenu({ anchor, items, onSelect }) {
     return `<button type="button" class="${cls}" role="menuitem" data-index="${index}">${escapeHtml(item.label)}</button>`;
   }).join('');
 
-  menu.classList.remove('hidden');
-  anchor.setAttribute('aria-expanded', 'true');
+  // Without this the row's hover-only action buttons would disappear while the
+  // trigger still holds focus.
   const anchorRow = anchor.closest('.tree-node');
   if (anchorRow) anchorRow.classList.add('menu-open');
-  placeMenu(menu, anchor, 'right');
 
-  const onPointerDown = (event) => {
-    if (menu.contains(event.target) || event.target === anchor) return;
-    closeRowMenu();
-  };
-  const onKeyDown = (event) => {
-    if (event.key === 'Escape') {
-      event.preventDefault();
-      // Focus the trigger while the row is still visible, then close: once it
-      // has focus, :focus-within keeps the row's actions on screen.
-      anchor.focus();
-      closeRowMenu();
-      return;
-    }
-    const buttons = Array.from(menu.querySelectorAll('.row-menu-item'));
-    if (!buttons.length) return;
-    const index = buttons.indexOf(document.activeElement);
-    if (event.key === 'ArrowDown') {
-      event.preventDefault();
-      buttons[(index + 1) % buttons.length].focus();
-    } else if (event.key === 'ArrowUp') {
-      event.preventDefault();
-      buttons[(index - 1 + buttons.length) % buttons.length].focus();
-    } else if (event.key === 'Tab') {
-      closeRowMenu();
-    }
-  };
-  const closeOnViewportChange = () => closeRowMenu();
-
-  document.addEventListener('pointerdown', onPointerDown, true);
-  document.addEventListener('keydown', onKeyDown, true);
-  window.addEventListener('scroll', closeOnViewportChange, true);
-  window.addEventListener('resize', closeOnViewportChange);
-  window.addEventListener('blur', closeOnViewportChange);
-
-  const cleanup = () => {
-    document.removeEventListener('pointerdown', onPointerDown, true);
-    document.removeEventListener('keydown', onKeyDown, true);
-    window.removeEventListener('scroll', closeOnViewportChange, true);
-    window.removeEventListener('resize', closeOnViewportChange);
-    window.removeEventListener('blur', closeOnViewportChange);
-  };
-
-  current = { anchor, items, onSelect, cleanup };
+  const close = openPopover({
+    menu,
+    anchor,
+    align: 'right',
+    onClose: () => {
+      current = null;
+      if (anchorRow) anchorRow.classList.remove('menu-open');
+    },
+  });
+  current = { anchor, close };
 
   menu.querySelectorAll('.row-menu-item').forEach((button) => {
     button.addEventListener('click', () => {
@@ -101,9 +51,4 @@ export function openRowMenu({ anchor, items, onSelect }) {
       if (item && onSelect) onSelect(item);
     });
   });
-
-  const first = menu.querySelector('.row-menu-item');
-  if (first) first.focus();
 }
-
-

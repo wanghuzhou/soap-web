@@ -1,7 +1,7 @@
 // Project tree rendering and all tree-level CRUD actions.
 
 import { $, escapeHtml, escapeAttr } from './dom.js';
-import { apiJSON } from './api.js';
+import { apiJSON, callPath, projectPath } from './api.js';
 import { toast } from './toast.js';
 import { state, findProject, findService, findOperation, findCall, toggleCollapsed, pruneCollapsed } from './state.js';
 import { openProxyDialog, proxyLabel } from './proxy.js';
@@ -409,10 +409,6 @@ function clearSelection(pid, sid, oid) {
   state.selected = null;
 }
 
-function projectURL(projectID, suffix = '') {
-  return '/api/projects/' + encodeURIComponent(projectID) + suffix;
-}
-
 // ---- In-place rename (no prompt dialogs) ----
 
 function findRow(kind, ids) {
@@ -455,15 +451,15 @@ async function commitRename(kind, ids, next, current) {
     if (kind === 'proj') {
       const project = findProject(ids.pid);
       if (!project) return;
-      await apiJSON('PUT', projectURL(ids.pid), { ...project, name: next });
+      // Narrow write: renaming must not overwrite concurrent edits to the rest
+      // of the project made in another tab.
+      await apiJSON('PUT', projectPath(ids.pid, 'name'), { name: next });
       project.name = next;
       renderTree();
     } else {
       const found = findCall(ids);
       if (!found) return;
-      const url = projectURL(ids.pid,
-        `/services/${encodeURIComponent(ids.sid)}/operations/${encodeURIComponent(ids.oid)}/calls/${encodeURIComponent(ids.cid)}`);
-      await apiJSON('PUT', url, { ...found.call, title: next });
+      await apiJSON('PUT', callPath(ids), { ...found.call, title: next });
       found.call.title = next;
       renderTree();
       // Keep the request pane title in sync without reloading the editor
@@ -486,27 +482,27 @@ async function handleTreeAction(data) {
     if (action === 'add-svc') {
       const name = prompt('新服务名称：', 'NewService');
       if (name == null) return;
-      await apiJSON('POST', projectURL(data.pid, '/services'), { name: name || 'Service' });
+      await apiJSON('POST', projectPath(data.pid, 'services'), { name: name || 'Service' });
       await handlers.reload();
     } else if (action === 'del-svc') {
       if (!confirm('确定删除该服务及其下所有操作？')) return;
-      await apiJSON('DELETE', projectURL(data.pid, `/services/${encodeURIComponent(data.sid)}`));
+      await apiJSON('DELETE', projectPath(data.pid, 'services', data.sid));
       clearSelection(data.pid, data.sid);
       await handlers.reload();
     } else if (action === 'add-op') {
       const name = prompt('新操作名称：', 'NewOperation');
       if (name == null) return;
-      await apiJSON('POST', projectURL(data.pid, `/services/${encodeURIComponent(data.sid)}/operations`), { name: name || 'Operation' });
+      await apiJSON('POST', projectPath(data.pid, 'services', data.sid, 'operations'), { name: name || 'Operation' });
       await handlers.reload();
     } else if (action === 'del-op') {
       if (!confirm('确定删除该操作及其下所有请求？')) return;
-      await apiJSON('DELETE', projectURL(data.pid, `/services/${encodeURIComponent(data.sid)}/operations/${encodeURIComponent(data.oid)}`));
+      await apiJSON('DELETE', projectPath(data.pid, 'services', data.sid, 'operations', data.oid));
       clearSelection(data.pid, data.sid, data.oid);
       await handlers.reload();
     } else if (action === 'add-call') {
       // Create immediately with the backend's default title, then start an
       // in-place rename so the user can name it without an extra dialog.
-      const url = projectURL(data.pid, `/services/${encodeURIComponent(data.sid)}/operations/${encodeURIComponent(data.oid)}/calls`);
+      const url = projectPath(data.pid, 'services', data.sid, 'operations', data.oid, 'calls');
       const created = await apiJSON('POST', url, { title: '' });
       // The new call must be visible for the inline rename input to exist; make
       // sure a previously collapsed operation is expanded before re-rendering.
@@ -518,7 +514,7 @@ async function handleTreeAction(data) {
       beginRename('call', ids);
     } else if (action === 'del-call') {
       if (!confirm('确定删除该请求样例？')) return;
-      await apiJSON('DELETE', projectURL(data.pid, `/services/${encodeURIComponent(data.sid)}/operations/${encodeURIComponent(data.oid)}/calls/${encodeURIComponent(data.cid)}`));
+      await apiJSON('DELETE', projectPath(data.pid, 'services', data.sid, 'operations', data.oid, 'calls', data.cid));
       clearSelection(data.pid, data.sid, data.oid);
       await handlers.reload();
     } else if (action === 'rename-call') {
@@ -528,14 +524,14 @@ async function handleTreeAction(data) {
     } else if (action === 'del-proj') {
       const project = findProject(data.pid);
       if (!confirm('确定删除整个工程「' + ((project && project.name) || '') + '」？')) return;
-      await apiJSON('DELETE', projectURL(data.pid));
+      await apiJSON('DELETE', projectPath(data.pid));
       clearSelection(data.pid);
       await handlers.reload();
     } else if (action === 'rename-proj') {
       beginRename('proj', { pid: data.pid });
     } else if (action === 'export-proj') {
       const link = document.createElement('a');
-      link.href = projectURL(data.pid, '/export');
+      link.href = projectPath(data.pid, 'export');
       link.download = '';
       document.body.appendChild(link);
       link.click();

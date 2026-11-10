@@ -6,14 +6,15 @@
 // settings apply (the browser would bypass them).
 
 import { $ } from './dom.js';
-import { apiJSON } from './api.js';
+import { apiJSON, path } from './api.js';
 import { toast } from './toast.js';
 import { state, workspaceLandedIn } from './state.js';
 import { proxyLabel } from './proxy.js';
+import { openModal } from './modal.js';
 
 let reloadHandler = async () => {};
 let onImported = () => {};
-let lastFocus = null;
+let closeDialog = null;
 let busy = false;
 
 export function initWsdlUrl({ reload, onImported: imported } = {}) {
@@ -25,9 +26,6 @@ export function initWsdlUrl({ reload, onImported: imported } = {}) {
   $('wsdlUrlCancel').addEventListener('click', closeWsdlUrlDialog);
   $('wsdlUrlImport').addEventListener('click', submitWsdlUrl);
   $('wsdlUrlProxy').addEventListener('change', updateProxyCustomVisibility);
-  $('wsdlUrlOverlay').addEventListener('click', (event) => {
-    if (event.target === $('wsdlUrlOverlay')) closeWsdlUrlDialog();
-  });
 
   // Enter submits from the URL field, matching how people expect a one-field
   // dialog to behave.
@@ -37,28 +35,18 @@ export function initWsdlUrl({ reload, onImported: imported } = {}) {
       submitWsdlUrl();
     }
   });
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !$('wsdlUrlOverlay').classList.contains('hidden')) {
-      closeWsdlUrlDialog();
-    }
-  });
 }
 
 function openWsdlUrlDialog() {
-  lastFocus = document.activeElement;
   clearError();
   $('wsdlUrlInput').value = '';
   populateProxyOptions();
-  $('wsdlUrlOverlay').classList.remove('hidden');
+  closeDialog = openModal('wsdlUrlOverlay', { fallbackFocus: 'btnWsdlUrl' });
   $('wsdlUrlInput').focus();
 }
 
 function closeWsdlUrlDialog() {
-  $('wsdlUrlOverlay').classList.add('hidden');
-  const back = lastFocus && lastFocus.isConnected ? lastFocus : $('btnWsdlUrl');
-  lastFocus = null;
-  if (back && back.focus) back.focus();
+  if (closeDialog) closeDialog();
 }
 
 // populateProxyOptions fills the proxy dropdown. Direct connection is the
@@ -196,7 +184,7 @@ async function submitWsdlUrl() {
     // The server allows itself 30s for the download; the client waits a little
     // longer so a slow-but-successful import is not reported as a timeout.
     const startedIn = state.workspaceId;
-    const result = await apiJSON('POST', '/api/wsdl/fetch', payload, { timeoutMs: 45_000 });
+    const result = await apiJSON('POST', path('wsdl', 'fetch'), payload, { timeoutMs: 45_000 });
     const project = result && result.project;
     closeWsdlUrlDialog();
     await reloadHandler();

@@ -4,27 +4,20 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { apiJSON, apiUpload } from './api.js';
+import { apiJSON, apiUpload, path } from './api.js';
 import { isDirty } from './editor.js';
 import { applyWorkspace, enterWorkspace } from './workspace.js';
 import { toast } from './toast.js';
+import { openModal } from './modal.js';
 
 let busy = false;
+let closeDialog = null;
 
 export function initWorkspaceIO() {
   $('exportClose').addEventListener('click', closeExportDialog);
   $('exportCancel').addEventListener('click', closeExportDialog);
   $('exportConfirm').addEventListener('click', confirmExport);
-  $('exportOverlay').addEventListener('click', (event) => {
-    if (event.target === $('exportOverlay')) closeExportDialog();
-  });
   $('workspaceFileInput').addEventListener('change', handleImportFile);
-
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !$('exportOverlay').classList.contains('hidden')) {
-      closeExportDialog();
-    }
-  });
 }
 
 // openExportDialog is wired to the workspace menu. The proxy checkbox always
@@ -32,12 +25,12 @@ export function initWorkspaceIO() {
 export function openExportDialog() {
   if (busy) return;
   $('exportKeepProxy').checked = false;
-  $('exportOverlay').classList.remove('hidden');
+  closeDialog = openModal('exportOverlay', { fallbackFocus: 'workspaceBtn' });
   $('exportConfirm').focus();
 }
 
 function closeExportDialog() {
-  $('exportOverlay').classList.add('hidden');
+  if (closeDialog) closeDialog();
 }
 
 async function confirmExport() {
@@ -47,7 +40,7 @@ async function confirmExport() {
   button.disabled = true;
   const keepProxy = $('exportKeepProxy').checked;
   try {
-    const projects = await apiJSON('POST', '/api/workspaces/export', { keepProxy });
+    const projects = await apiJSON('POST', path('workspaces', 'export'), { keepProxy });
     downloadJSON(projects, state.workspaceName);
     closeExportDialog();
     toast('已导出工作空间：' + state.workspaceName);
@@ -98,7 +91,10 @@ async function handleImportFile(event) {
 
   busy = true;
   try {
-    const payload = await apiUpload('/api/workspaces/import?name=' + encodeURIComponent(name), file);
+    const payload = await apiUpload(
+      path('workspaces', 'import') + '?name=' + encodeURIComponent(name),
+      file,
+    );
     applyWorkspace(payload);
     await enterWorkspace();
     toast('已导入工作空间：' + state.workspaceName);

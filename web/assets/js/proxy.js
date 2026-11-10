@@ -1,13 +1,14 @@
 // Per-project proxy settings dialog.
 
 import { $ } from './dom.js';
-import { apiJSON } from './api.js';
+import { apiJSON, projectPath } from './api.js';
 import { toast } from './toast.js';
 import { findProject } from './state.js';
+import { openModal } from './modal.js';
 
 let editingProjectID = null;
 let reloadHandler = async () => {};
-let lastFocus = null;
+let closeDialog = null;
 let saving = false;
 
 export function proxyLabel(proxy) {
@@ -22,27 +23,14 @@ export function initProxy({ reload }) {
   $('proxyClose').addEventListener('click', closeProxyDialog);
   $('proxyCancel').addEventListener('click', closeProxyDialog);
   $('proxySave').addEventListener('click', saveProxy);
-  $('proxyOverlay').addEventListener('click', (event) => {
-    if (event.target === $('proxyOverlay')) closeProxyDialog();
-  });
   document.querySelectorAll('input[name="proxyMode"]').forEach((radio) => {
     radio.addEventListener('change', updateProxyCustomVisibility);
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !$('proxyOverlay').classList.contains('hidden')) {
-      closeProxyDialog();
-    }
   });
 }
 
 export function openProxyDialog(projectID) {
   const project = findProject(projectID);
   if (!project) return;
-
-  // Remember where focus came from so closing the dialog can restore it. The
-  // tree is re-rendered on save, which destroys the original button, so the
-  // restore is best-effort and falls back to a stable element.
-  lastFocus = document.activeElement;
 
   editingProjectID = projectID;
   $('proxyProjectName').textContent = '工程：' + (project.name || '');
@@ -57,7 +45,7 @@ export function openProxyDialog(projectID) {
   $('proxyUser').value = proxy.username || '';
   $('proxyPass').value = proxy.password || '';
   updateProxyCustomVisibility();
-  $('proxyOverlay').classList.remove('hidden');
+  closeDialog = openModal('proxyOverlay', { fallbackFocus: 'btnNewProject' });
 
   // Focus something that is actually visible. #proxyHost lives inside
   // #proxyCustom, which is display:none unless mode is "custom"; focusing a
@@ -69,13 +57,8 @@ export function openProxyDialog(projectID) {
 }
 
 function closeProxyDialog() {
-  $('proxyOverlay').classList.add('hidden');
   editingProjectID = null;
-  // Restore focus if the originating element still exists; otherwise move it
-  // somewhere sane instead of leaving it on <body>.
-  const back = lastFocus && lastFocus.isConnected ? lastFocus : $('btnNewProject');
-  lastFocus = null;
-  if (back && back.focus) back.focus();
+  if (closeDialog) closeDialog();
 }
 
 function updateProxyCustomVisibility() {
@@ -115,7 +98,7 @@ async function saveProxy() {
   try {
     // Narrow endpoint: only the proxy field is written. Sending the whole
     // project would overwrite concurrent changes made in another tab.
-    await apiJSON('PUT', '/api/projects/' + encodeURIComponent(project.id) + '/proxy', proxy);
+    await apiJSON('PUT', projectPath(project.id, 'proxy'), proxy);
     // Close the dialog before reloading: reload re-renders the tree, which
     // destroys the button that opened the dialog and breaks focus restore.
     closeProxyDialog();

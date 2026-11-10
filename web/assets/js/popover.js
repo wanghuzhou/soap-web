@@ -30,3 +30,71 @@ export function placeMenu(menu, anchor, align = 'right') {
   menu.style.left = Math.round(left) + 'px';
   menu.style.top = Math.round(top) + 'px';
 }
+
+// ITEM_SELECTOR is the focusable menu entry shared by the row menu and the
+// workspace switcher.
+const ITEM_SELECTOR = '.row-menu-item:not(:disabled)';
+
+// openPopover makes a rendered menu interactive: it positions the menu, moves
+// focus into it, and closes on Escape, an outside click, Tab, or a viewport
+// change. Callers own the menu contents and their click handlers.
+export function openPopover({ menu, anchor, align = 'right', onClose }) {
+  menu.classList.remove('hidden');
+  anchor.setAttribute('aria-expanded', 'true');
+  placeMenu(menu, anchor, align);
+
+  const items = () => Array.from(menu.querySelectorAll(ITEM_SELECTOR));
+  const first = items()[0];
+  if (first) first.focus();
+
+  let closed = false;
+  const close = (restoreFocus = false) => {
+    if (closed) return;
+    closed = true;
+    document.removeEventListener('pointerdown', onPointerDown, true);
+    document.removeEventListener('keydown', onKeyDown, true);
+    window.removeEventListener('resize', onViewportChange);
+    window.removeEventListener('scroll', onViewportChange, true);
+    window.removeEventListener('blur', onViewportChange);
+    // Focus the trigger before hiding so :focus-within keeps a tree row's
+    // actions visible while the menu disappears.
+    if (restoreFocus && anchor.isConnected) anchor.focus();
+    menu.classList.add('hidden');
+    menu.innerHTML = '';
+    if (anchor.isConnected) anchor.setAttribute('aria-expanded', 'false');
+    if (onClose) onClose();
+  };
+
+  const onPointerDown = (event) => {
+    if (menu.contains(event.target) || anchor.contains(event.target)) return;
+    close();
+  };
+  const onViewportChange = () => close();
+  const onKeyDown = (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      close(true);
+      return;
+    }
+    const list = items();
+    if (!list.length) return;
+    const index = list.indexOf(document.activeElement);
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      list[(index + 1) % list.length].focus();
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      list[(index - 1 + list.length) % list.length].focus();
+    } else if (event.key === 'Tab') {
+      close();
+    }
+  };
+
+  document.addEventListener('pointerdown', onPointerDown, true);
+  document.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('resize', onViewportChange);
+  window.addEventListener('scroll', onViewportChange, true);
+  window.addEventListener('blur', onViewportChange);
+
+  return () => close();
+}

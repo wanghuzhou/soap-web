@@ -2,7 +2,7 @@
 
 import { $ } from './dom.js';
 import { state, initCollapsed, findService, findOperation, findCall, workspaceLandedIn } from './state.js';
-import { apiGet, apiHealth, apiJSON, apiUpload } from './api.js';
+import { apiGet, apiHealth, apiJSON, apiUpload, path } from './api.js';
 import { toast } from './toast.js';
 import { initTheme } from './theme.js';
 import { initTree, renderTree, syncSelection } from './tree.js';
@@ -54,20 +54,29 @@ function startHealthMonitor() {
   $('serverState').addEventListener('click', checkHealth);
 }
 
+// fetchProjects refreshes the project list and the server status badge.
+async function fetchProjects() {
+  state.projects = await apiGet(path('projects'));
+  setServerState(true, '就绪');
+}
+
+// handleLoadError reports a failed project fetch. A workspace mismatch is not an
+// outage: workspace.js marks the tab stale and offers a sync.
+function handleLoadError(error) {
+  if (error.code === 'workspace_mismatch') return;
+  setServerState(false, '连接失败');
+  toast('加载工程失败: ' + error.message, true);
+}
+
 async function loadProjects(selectFirst) {
   try {
-    state.projects = await apiGet('/api/projects');
-    setServerState(true, '就绪');
+    await fetchProjects();
     renderTree();
     if (selectFirst && state.projects.length) {
       selectFirstInProject(state.projects[0]);
     }
   } catch (error) {
-    // A workspace mismatch is not an outage: workspace.js marks the tab stale
-    // and offers a sync, and its own toast explains the situation.
-    if (error.code === 'workspace_mismatch') return;
-    setServerState(false, '连接失败');
-    toast('加载工程失败: ' + error.message, true);
+    handleLoadError(error);
   }
 }
 
@@ -77,12 +86,9 @@ async function loadProjects(selectFirst) {
 async function reload() {
   const selected = state.selected;
   try {
-    state.projects = await apiGet('/api/projects');
-    setServerState(true, '就绪');
+    await fetchProjects();
   } catch (error) {
-    if (error.code === 'workspace_mismatch') return;
-    setServerState(false, '连接失败');
-    toast(error.message, true);
+    handleLoadError(error);
     return;
   }
 
@@ -166,7 +172,7 @@ async function createProject() {
   const name = prompt('新工程名称：', '新工程');
   if (name == null) return;
   try {
-    const project = await apiJSON('POST', '/api/projects', { name: name || '新工程', services: [] });
+    const project = await apiJSON('POST', path('projects'), { name: name || '新工程', services: [] });
     await loadProjects(false);
     toast('已创建工程：' + project.name);
   } catch (error) {
@@ -180,42 +186,42 @@ function pickFile(mode) {
   $('fileInput').click();
 }
 
-async function importSoapUI(file) {
+// importFile uploads a project document. Both import entry points share the
+// same "upload → reload → check the landing workspace → select" flow.
+async function importFile(file, { endpoint, landedMessage, doneMessage }) {
   const startedIn = state.workspaceId;
   try {
-    const result = await apiUpload('/api/import/soapui', file);
-    const saved = (result && result.project) || result;
+    const result = await apiUpload(endpoint, file);
     await loadProjects(false);
     // A slow upload can finish after another tab switched workspaces.
     const other = workspaceLandedIn(result, startedIn);
     if (other) {
-      toast('已导入到工作空间「' + other + '」，当前工作空间已切换', true);
+      toast(landedMessage + '「' + other + '」，当前工作空间已切换', true);
       return;
     }
-    toast('已导入并保存工程：' + (saved.name || file.name));
-    const project = (state.projects || []).find((item) => item.id === saved.id);
+    const saved = (result && result.project) || result;
+    toast(doneMessage(saved, file));
+    const project = saved && (state.projects || []).find((item) => item.id === saved.id);
     if (project) selectFirstInProject(project);
   } catch (error) {
     toast(error.message, true);
   }
 }
 
-async function parseWSDL(file) {
-  const startedIn = state.workspaceId;
-  try {
-    const result = await apiUpload('/api/wsdl/parse', file);
-    await loadProjects(false);
-    const other = workspaceLandedIn(result, startedIn);
-    if (other) {
-      toast('WSDL 已保存到工作空间「' + other + '」，当前工作空间已切换', true);
-      return;
-    }
-    toast('WSDL 解析完成并已保存工程');
-    const project = result.project && (state.projects || []).find((item) => item.id === result.project.id);
-    if (project) selectFirstInProject(project);
-  } catch (error) {
-    toast(error.message, true);
-  }
+function importSoapUI(file) {
+  return importFile(file, {
+    endpoint: path('import', 'soapui'),
+    landedMessage: '已导入到工作空间',
+    doneMessage: (saved) => '已导入并保存工程：' + ((saved && saved.name) || file.name),
+  });
+}
+
+function parseWSDL(file) {
+  return importFile(file, {
+    endpoint: path('wsdl', 'parse'),
+    landedMessage: 'WSDL 已保存到工作空间',
+    doneMessage: () => 'WSDL 解析完成并已保存工程',
+  });
 }
 
 async function boot() {

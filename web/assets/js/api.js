@@ -5,6 +5,24 @@
 const DEFAULT_TIMEOUT_MS = 30_000;
 const WORKSPACE_HEADER = 'X-Workspace-Id';
 
+// Path builders encode every dynamic segment, so callers composing nested
+// resource URLs cannot forget encodeURIComponent.
+export function path(...segments) {
+  return '/api/' + segments.map((segment) => encodeURIComponent(segment)).join('/');
+}
+
+export function projectPath(projectID, ...rest) {
+  return path('projects', projectID, ...rest);
+}
+
+export function callPath(ids) {
+  return projectPath(ids.pid, 'services', ids.sid, 'operations', ids.oid, 'calls', ids.cid);
+}
+
+export function workspacePath(workspaceID) {
+  return path('workspaces', workspaceID);
+}
+
 // workspaceID is the workspace this page loaded. Kept in this module (instead
 // of importing state) so every request path shares one source of truth without
 // a module cycle.

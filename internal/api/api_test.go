@@ -143,6 +143,50 @@ func TestNestedProjectCRUDRoutes(t *testing.T) {
 	}
 }
 
+// TestRenameProjectIsNarrowWrite verifies the name endpoint changes only the
+// name and leaves the rest of the project intact.
+func TestRenameProjectIsNarrowWrite(t *testing.T) {
+	_, mux, st := newTestServer(t)
+
+	project, err := st.AddProject(model.Project{
+		Name:     "before",
+		Services: []model.Service{{Name: "svc"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	body, _ := json.Marshal(map[string]string{"name": "after"})
+	req := httptest.NewRequest(http.MethodPut, "/api/projects/"+project.ID+"/name", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := st.Get(project.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "after" {
+		t.Errorf("name = %q, want after", got.Name)
+	}
+	if len(got.Services) != 1 || got.Services[0].Name != "svc" {
+		t.Errorf("services clobbered: %+v", got.Services)
+	}
+
+	// An empty name is rejected instead of wiping the field.
+	empty, _ := json.Marshal(map[string]string{"name": "  "})
+	req = httptest.NewRequest(http.MethodPut, "/api/projects/"+project.ID+"/name", bytes.NewReader(empty))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("empty name status = %d, want 400", rec.Code)
+	}
+}
+
 func p2ptr(p model.Project) *model.Project { return &p }
 
 func portOf(u *url.URL) int {

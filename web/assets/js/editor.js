@@ -2,7 +2,7 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { apiJSON, apiSend } from './api.js';
+import { apiJSON, apiSend, callPath, projectPath } from './api.js';
 import { toast } from './toast.js';
 import { prettyXML, minifyXML, normalizeNewlines, highlightXML } from './xml.js';
 import { syncSelection } from './tree.js';
@@ -342,13 +342,6 @@ function insertText(textarea, text) {
   textarea.setRangeText(text, start, end, 'end');
 }
 
-function callURL(ids) {
-  return '/api/projects/' + encodeURIComponent(ids.pid)
-    + '/services/' + encodeURIComponent(ids.sid)
-    + '/operations/' + encodeURIComponent(ids.oid)
-    + '/calls/' + encodeURIComponent(ids.cid);
-}
-
 // send executes the current request, or cancels the in-flight one. Each request
 // captures its ids; a late response is dropped if the selection moved on.
 async function send() {
@@ -454,7 +447,7 @@ async function saveCurrentCall() {
   saving = true;
   updateEditButtons();
   try {
-    await apiJSON('PUT', callURL(selected.ids), body);
+    await apiJSON('PUT', callPath(selected.ids), body);
     // The write succeeded: the editor content is now the saved baseline.
     markSaved();
     await reloadHandler();
@@ -476,16 +469,13 @@ async function deleteCurrentNode() {
   try {
     if (selected.kind === 'call') {
       if (!confirm('确定删除该请求样例？')) return;
-      await apiJSON('DELETE', callURL(ids));
+      await apiJSON('DELETE', callPath(ids));
     } else if (selected.kind === 'op') {
       if (!confirm('确定删除该操作及其下所有请求？')) return;
-      await apiJSON('DELETE', '/api/projects/' + encodeURIComponent(ids.pid)
-        + '/services/' + encodeURIComponent(ids.sid)
-        + '/operations/' + encodeURIComponent(ids.oid));
+      await apiJSON('DELETE', projectPath(ids.pid, 'services', ids.sid, 'operations', ids.oid));
     } else if (selected.kind === 'svc') {
       if (!confirm('确定删除该服务？')) return;
-      await apiJSON('DELETE', '/api/projects/' + encodeURIComponent(ids.pid)
-        + '/services/' + encodeURIComponent(ids.sid));
+      await apiJSON('DELETE', projectPath(ids.pid, 'services', ids.sid));
     } else {
       return;
     }
