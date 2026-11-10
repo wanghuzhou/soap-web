@@ -16,13 +16,24 @@ import (
 	"golang.org/x/text/encoding/traditionalchinese"
 )
 
+// IsUTF8 reports whether name denotes a charset that needs no transcoding.
+func IsUTF8(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "", "utf-8", "utf8", "us-ascii", "ascii", "unicode-1-1-utf-8":
+		return true
+	default:
+		return false
+	}
+}
+
 // lookup returns the encoding registered for a charset name. It reports false
 // for UTF-8 / ASCII (already handled) and for anything unknown, so callers can
 // fall back to treating the bytes as UTF-8.
 func lookup(name string) (encoding.Encoding, bool) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "utf-8", "utf8", "us-ascii", "ascii", "unicode-1-1-utf-8":
+	if IsUTF8(name) {
 		return nil, false
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "gbk", "cp936", "ms936", "windows-936", "x-gbk":
 		return simplifiedchinese.GBK, true
 	case "gb2312", "gb-2312", "euc-cn", "x-euc-cn", "csgb2312":

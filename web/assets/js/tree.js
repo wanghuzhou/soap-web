@@ -4,9 +4,9 @@
 import { $ } from './dom.js';
 import { renderTree, syncSelection, toggleNode } from './tree/render.js';
 import { initTreeNav, selectRow } from './tree/nav.js';
-import { initTreeActions, handleTreeAction, openProjectMenu } from './tree/actions.js';
+import { initTreeActions, handleTreeAction, openProjectMenu, deleteNode } from './tree/actions.js';
 
-export { renderTree, syncSelection, toggleNode };
+export { renderTree, syncSelection, toggleNode, deleteNode };
 
 export function initTree(options) {
   initTreeActions(options);

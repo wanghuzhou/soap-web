@@ -125,12 +125,15 @@ func isJSONRequest(r *http.Request) bool {
 	return mediaType == "application/json"
 }
 
+// maxUploadBytes caps an uploaded project or WSDL document.
+const maxUploadBytes = 32 << 20
+
 // readUpload extracts the raw bytes from a multipart "file" field, or from the
 // request body directly. The returned name is the uploaded filename if any.
 func readUpload(r *http.Request) ([]byte, string, error) {
 	mediaType, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if mediaType == "multipart/form-data" {
-		if err := r.ParseMultipartForm(32 << 20); err != nil {
+		if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
 			return nil, "", err
 		}
 		file, header, err := r.FormFile("file")
@@ -141,7 +144,7 @@ func readUpload(r *http.Request) ([]byte, string, error) {
 		data, err := io.ReadAll(file)
 		return data, header.Filename, err
 	}
-	data, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxUploadBytes))
 	return data, "", err
 }
 

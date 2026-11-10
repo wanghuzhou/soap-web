@@ -3,11 +3,16 @@
 
 import { $ } from './dom.js';
 
+// openModals maps an open overlay to its close function, so a double click
+// reuses the existing instance instead of stacking listeners.
+const openModals = new Map();
+
 // openModal reveals overlayId and returns a close function. onClose runs after
 // the overlay is hidden, so callers can clear their own editing state.
 export function openModal(overlayId, { onClose, fallbackFocus } = {}) {
   const overlay = $(overlayId);
   if (!overlay) return () => {};
+  if (openModals.has(overlayId)) return openModals.get(overlayId);
 
   const lastFocus = document.activeElement;
   overlay.classList.remove('hidden');
@@ -16,13 +21,14 @@ export function openModal(overlayId, { onClose, fallbackFocus } = {}) {
   const close = () => {
     if (closed) return;
     closed = true;
+    openModals.delete(overlayId);
     document.removeEventListener('keydown', onKeyDown, true);
     overlay.removeEventListener('click', onOverlayClick);
     overlay.classList.add('hidden');
     if (onClose) onClose();
-    // The opener may have been re-rendered away; fall back to a stable element
-    // instead of leaving focus on <body>.
-    const back = lastFocus && lastFocus.isConnected
+    // The opener may have been re-rendered away (or focus may have fallen to
+    // <body> when a menu closed); use the fallback in both cases.
+    const back = lastFocus && lastFocus !== document.body && lastFocus.isConnected
       ? lastFocus
       : (fallbackFocus ? $(fallbackFocus) : null);
     if (back && back.focus) back.focus();
@@ -40,5 +46,6 @@ export function openModal(overlayId, { onClose, fallbackFocus } = {}) {
 
   document.addEventListener('keydown', onKeyDown, true);
   overlay.addEventListener('click', onOverlayClick);
+  openModals.set(overlayId, close);
   return close;
 }

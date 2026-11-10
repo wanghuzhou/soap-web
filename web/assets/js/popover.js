@@ -81,10 +81,12 @@ export function openPopover({ menu, anchor, align = 'right', onClose }) {
     const index = list.indexOf(document.activeElement);
     if (event.key === 'ArrowDown') {
       event.preventDefault();
-      list[(index + 1) % list.length].focus();
+      const next = index < 0 ? 0 : (index + 1) % list.length;
+      list[next].focus();
     } else if (event.key === 'ArrowUp') {
       event.preventDefault();
-      list[(index - 1 + list.length) % list.length].focus();
+      const prev = index < 0 ? list.length - 1 : (index - 1 + list.length) % list.length;
+      list[prev].focus();
     } else if (event.key === 'Tab') {
       close();
     }

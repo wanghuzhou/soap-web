@@ -2,10 +2,10 @@
 
 import { $ } from './dom.js';
 import { state } from './state.js';
-import { apiJSON, apiSend, callPath, projectPath } from './api.js';
+import { apiJSON, apiSend, callPath } from './api.js';
 import { toast } from './toast.js';
 import { prettyXML, minifyXML, normalizeNewlines } from './xml.js';
-import { syncSelection } from './tree.js';
+import { syncSelection, deleteNode } from './tree.js';
 import { STORAGE_KEY } from './constants.js';
 import { isRenaming } from './inlineedit.js';
 import { renderResponse } from './response.js';
@@ -375,18 +375,7 @@ async function deleteCurrentNode() {
   saving = true;
   updateEditButtons();
   try {
-    if (selected.kind === 'call') {
-      if (!confirm('确定删除该请求样例？')) return;
-      await apiJSON('DELETE', callPath(ids));
-    } else if (selected.kind === 'op') {
-      if (!confirm('确定删除该操作及其下所有请求？')) return;
-      await apiJSON('DELETE', projectPath(ids.pid, 'services', ids.sid, 'operations', ids.oid));
-    } else if (selected.kind === 'svc') {
-      if (!confirm('确定删除该服务？')) return;
-      await apiJSON('DELETE', projectPath(ids.pid, 'services', ids.sid));
-    } else {
-      return;
-    }
+    if (!(await deleteNode(selected.kind, ids))) return;
     state.selected = null;
     await reloadHandler();
     toast('已删除');

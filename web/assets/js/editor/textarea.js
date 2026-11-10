@@ -12,9 +12,21 @@ const INDENT = '  ';
 export function initTextarea() {
   const textarea = $('requestBody');
   if (!textarea) return;
-  textarea.addEventListener('input', renderHighlight);
+  textarea.addEventListener('input', scheduleHighlight);
   textarea.addEventListener('scroll', syncScroll, { passive: true });
   textarea.addEventListener('keydown', handleEditorKeydown);
+}
+
+// scheduleHighlight coalesces a burst of input events into one highlight pass
+// per animation frame, so rapid typing or IME composition does not re-tokenize
+// the whole document for every event.
+let highlightFrame = 0;
+function scheduleHighlight() {
+  if (highlightFrame) return;
+  highlightFrame = requestAnimationFrame(() => {
+    highlightFrame = 0;
+    renderHighlight();
+  });
 }
 
 export function renderHighlight() {

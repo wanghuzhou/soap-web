@@ -165,7 +165,7 @@ func adaptCharset(data []byte, contentType string) []byte {
 			name = strings.TrimSpace(params["charset"])
 		}
 	}
-	if isUTF8Charset(name) {
+	if charset.IsUTF8(name) {
 		return data
 	}
 
@@ -182,16 +182,6 @@ func adaptCharset(data []byte, contentType string) []byte {
 		return rewriteXMLDeclEncoding(decoded)
 	}
 	return decoded
-}
-
-// isUTF8Charset reports charsets that need no transcoding.
-func isUTF8Charset(name string) bool {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "", "utf-8", "utf8", "us-ascii", "ascii":
-		return true
-	default:
-		return false
-	}
 }
 
 // rewriteXMLDeclEncoding replaces the value of encoding="..." in the XML
