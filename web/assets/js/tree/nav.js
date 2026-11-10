@@ -3,7 +3,7 @@
 import { $ } from '../dom.js';
 import { findService, findOperation, findCall } from '../state.js';
 import { isCollapsed, toggleNode } from './render.js';
-import { handleTreeAction } from './actions.js';
+import { handleTreeAction, beginRename } from './actions.js';
 
 let onSelect = () => {};
 
@@ -36,7 +36,7 @@ function visibleRows(tree) {
 //   Right     expand, or move into the first child
 //   Left      collapse, or move to the parent
 //   Enter/Space select the row
-//   F2        rename (calls only)
+//   F2        rename (request samples and projects)
 function handleTreeKeydown(event) {
   const row = event.target.closest('.tree-node');
   if (!row) return;
@@ -96,12 +96,17 @@ function handleTreeKeydown(event) {
       event.preventDefault();
       selectRow(row);
       return;
-    case 'F2':
-      if (row.dataset.kind === 'call') {
+    case 'F2': {
+      const data = row.dataset;
+      if (data.kind === 'call') {
         event.preventDefault();
-        handleTreeAction({ act: 'rename-call', ...row.dataset });
+        beginRename('call', { pid: data.pid, sid: data.sid, oid: data.oid, cid: data.cid });
+      } else if (data.kind === 'proj') {
+        event.preventDefault();
+        beginRename('proj', { pid: data.pid });
       }
       return;
+    }
     default:
   }
 }

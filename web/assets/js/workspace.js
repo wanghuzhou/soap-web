@@ -12,7 +12,8 @@ import { toast } from './toast.js';
 let onEnter = async () => {};
 let onExport = () => {};
 let onImport = () => {};
-let menuOpen = false;
+// closeMenuFn is non-null exactly while the menu is open, so it doubles as the
+// open/closed flag.
 let closeMenuFn = null;
 
 // initWorkspace wires the top-bar control. onEnter is called after the active
@@ -31,7 +32,7 @@ export function initWorkspace(options = {}) {
         syncNow(false);
         return;
       }
-      if (menuOpen) closeMenu();
+      if (closeMenuFn) closeMenu();
       else openMenu();
     });
   }
@@ -250,11 +251,9 @@ function openMenu() {
     anchor: button,
     align: 'left',
     onClose: () => {
-      menuOpen = false;
       closeMenuFn = null;
     },
   });
-  menuOpen = true;
 }
 
 function closeMenu() {

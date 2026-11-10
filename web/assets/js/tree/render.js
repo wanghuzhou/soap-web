@@ -198,6 +198,27 @@ export function toggleNode(key) {
   applyCollapseVisibility();
 }
 
+// updateRowLabel rewrites one row's visible text and tooltip in place. A rename
+// changes no structure, so rebuilding the whole tree would only cost the
+// user's focus, scroll position and in-place edit state.
+export function updateRowLabel(kind, ids, label) {
+  const tree = $('tree');
+  if (!tree) return;
+  for (const row of tree.querySelectorAll('.tree-node')) {
+    const d = row.dataset;
+    if (d.kind !== kind || d.pid !== ids.pid) continue;
+    if (ids.sid && d.sid !== ids.sid) continue;
+    if (ids.oid && d.oid !== ids.oid) continue;
+    if (ids.cid && d.cid !== ids.cid) continue;
+    const span = row.querySelector('.lbl');
+    if (span) {
+      span.textContent = label;
+      span.title = label;
+    }
+    return;
+  }
+}
+
 // syncTabStop keeps exactly one visible row reachable with Tab.
 function syncTabStop() {
   const tree = $('tree');

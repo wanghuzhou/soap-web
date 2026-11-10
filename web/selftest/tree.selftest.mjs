@@ -42,19 +42,25 @@ class El {
   }
   set innerHTML(v) { this._html = String(v); this.children = parseRows(this, String(v)); }
   get innerHTML() { return this._html; }
-  set textContent(v) { this._text = String(v); }
+  set textContent(v) {
+    this._text = String(v);
+    // Rows mutate their .lbl span in place, so the cached HTML must follow the
+    // real DOM's textContent behaviour or assertions would read stale markup.
+    if (this.classes.has('lbl')) this._html = String(v);
+  }
   get textContent() { return this._text; }
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return this.attrs[k] ?? null; }
   addEventListener(t, fn) { (this.listeners[t] = this.listeners[t] || []).push(fn); }
   removeEventListener(t, fn) { this.listeners[t] = (this.listeners[t] || []).filter((f) => f !== fn); }
   focus() { globalThis.__focused = this; }
-  querySelector() { return null; }
+  querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   querySelectorAll(sel) {
     const all = this.children.filter((c) => c.classes.has('tree-node'));
     if (sel === '.tree-node') return all;
     if (sel === '.tree-node.selected') return all.filter((c) => c.classes.has('selected'));
     if (sel === '.rename-input') return [];
+    if (sel === '.lbl') return this.lbl ? [this.lbl] : [];
     return [];
   }
   closest() { return null; }
@@ -73,6 +79,17 @@ function parseRows(parent, html) {
     while ((d = dataRe.exec(m[2])) !== null) el.dataset[d[1]] = d[2];
     const exp = /aria-expanded="([^"]*)"/.exec(m[2]);
     if (exp) el.attrs['aria-expanded'] = exp[1];
+    // The row's label span, so updateRowLabel has something to write into.
+    const lblRe = /<span class="lbl"[^>]*>([\s\S]*?)<\/span>/;
+    const lbl = lblRe.exec(html.slice(re.lastIndex)) || lblRe.exec(html);
+    if (lbl) {
+      const span = new El('span');
+      span.className = 'lbl';
+      span.parent = el;
+      span._text = lbl[1];
+      span._html = lbl[1];
+      el.lbl = span;
+    }
     rows.push(el);
   }
   return rows;
@@ -111,6 +128,7 @@ globalThis.prompt = (msg, def) => def;
 const base = new URL('../assets/js/', import.meta.url);
 const { state, initCollapsed, saveCollapsed } = await import(new URL('state.js', base).href);
 const { renderTree, syncSelection, toggleNode } = await import(new URL('tree.js', base).href);
+const { updateRowLabel } = await import(new URL('tree/render.js', base).href);
 
 let failures = 0;
 let checks = 0;
@@ -241,6 +259,29 @@ check('展开后后代行恢复',
   getEl('tree').children
     .filter((r) => r.dataset.kind !== 'proj')
     .every((r) => !r.classes.has('is-hidden')));
+
+// ---- renaming updates the label in place, without rebuilding the tree ----
+// A rename changes no structure, so rebuilding would cost focus, scroll
+// position and any in-place edit state.
+state.collapsed = {};
+state.projects = fixture(1);
+state.selected = null;
+renderTree();
+const beforeRename = getEl('tree').innerHTML;
+updateRowLabel('call', { pid: 'p1', sid: 's1', oid: 'o1', cid: 'c1' }, 'renamed call');
+check('重命名不重建树', getEl('tree').innerHTML === beforeRename,
+  'updateRowLabel 改变了树的 HTML');
+const renamedRow = getEl('tree').children.find((r) => r.dataset.cid === 'c1');
+check('重命名后行文本已更新', !!renamedRow && renamedRow.lbl && renamedRow.lbl.textContent === 'renamed call',
+  '行内标签仍是旧名称');
+updateRowLabel('proj', { pid: 'p1' }, 'Renamed Project');
+check('工程重命名不重建树', getEl('tree').innerHTML === beforeRename);
+const renamedProject = getEl('tree').children.find((r) => r.dataset.kind === 'proj');
+check('工程重命名后标签已更新',
+  !!renamedProject && renamedProject.lbl && renamedProject.lbl.textContent === 'Renamed Project');
+updateRowLabel('call', { pid: 'nope', sid: 's1', oid: 'o1', cid: 'c1' }, 'x');
+check('未知 id 不改变任何行',
+  getEl('tree').children.every((r) => !r.lbl || r.lbl.textContent !== 'x'));
 
 // ---- report ----
 if (failures === 0) {

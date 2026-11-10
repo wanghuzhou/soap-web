@@ -7,7 +7,7 @@ import { state, findProject, findCall, toggleCollapsed } from '../state.js';
 import { openProxyDialog } from '../proxy.js';
 import { openRowMenu } from '../rowmenu.js';
 import { startInlineRename } from '../inlineedit.js';
-import { isCollapsed, renderTree } from './render.js';
+import { isCollapsed, updateRowLabel } from './render.js';
 
 let hooks = {
   onSelect: () => {},
@@ -96,13 +96,13 @@ async function commitRename(kind, ids, next, current) {
       // of the project made in another tab.
       await apiJSON('PUT', projectPath(ids.pid, 'name'), { name: next });
       project.name = next;
-      renderTree();
+      updateRowLabel('proj', ids, next);
     } else {
       const found = findCall(ids);
       if (!found) return;
       await apiJSON('PUT', callPath(ids), { ...found.call, title: next });
       found.call.title = next;
-      renderTree();
+      updateRowLabel('call', ids, next);
       // Keep the request pane title in sync without reloading the editor
       // (which would discard unsaved XML edits).
       const selected = state.selected;
@@ -113,6 +113,7 @@ async function commitRename(kind, ids, next, current) {
     }
     toast('已重命名');
   } catch (error) {
+    // The API call failed, so the row still shows the old name; nothing to undo.
     toast('重命名失败: ' + error.message, true);
   }
 }
