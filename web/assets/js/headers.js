@@ -175,26 +175,30 @@ function handleEdit(event) {
   const target = draft[Number(row.dataset.index)];
   if (!target) return;
 
-  if (input.dataset.field === 'name') {
-    target.name = input.value;
-    // Renaming a project row keeps it inherited only while the name matches a
-    // project header; otherwise it becomes the user's own row.
-    const inherited = currentProjectHeaders().some(
-      (h) => h.name.toLowerCase() === input.value.trim().toLowerCase(),
-    );
-    target.fromProject = inherited;
-  } else {
-    target.value = input.value;
-    // Typing over an inherited value turns the row into an override.
-    if (target.fromProject && target.value !== inheritedValue(target.name)) {
-      target.fromProject = false;
-    }
-  }
+  applyRowEdit(target, input.dataset.field, input.value, currentProjectHeaders());
   onDirty();
 }
 
-function inheritedValue(name) {
-  const found = currentProjectHeaders().find((h) => h.name.toLowerCase() === name.trim().toLowerCase());
+// applyRowEdit updates one draft row. Exported for the selftest: renaming a row
+// onto a project header only counts as inherited when the value also matches,
+// otherwise saving the call would silently drop the override.
+export function applyRowEdit(row, field, value, projectHeaders) {
+  if (field === 'name') {
+    row.name = value;
+    const inherited = inheritedValue(projectHeaders, value);
+    row.fromProject = inherited !== undefined && row.value === inherited;
+  } else {
+    row.value = value;
+    // Typing over an inherited value turns the row into an override.
+    if (row.fromProject && value !== inheritedValue(projectHeaders, row.name)) {
+      row.fromProject = false;
+    }
+  }
+}
+
+function inheritedValue(projectHeaders, name) {
+  const wanted = String(name || '').trim().toLowerCase();
+  const found = projectHeaders.find((h) => h.name.toLowerCase() === wanted);
   return found ? found.value : undefined;
 }
 

@@ -118,10 +118,11 @@ globalThis.confirm = () => true;
 // ---------- run the real modules ----------
 const base = new URL('../assets/js/', import.meta.url);
 const { state } = await import(new URL('state.js', base).href);
-const { renderTree } = await import(new URL('tree.js', base).href);
+const { renderTree, initTree } = await import(new URL('tree.js', base).href);
 const { buildCurl, sensitiveNames } = await import(new URL('curl.js', base).href);
 const { isSensitiveName, TIMEOUT } = await import(new URL('constants.js', base).href);
-const { initTreeSearch, applyTreeFilter, getQuery } = await import(new URL('tree/search.js', base).href);
+const { applyTreeFilter, getQuery } = await import(new URL('tree/search.js', base).href);
+const { applyRowEdit } = await import(new URL('headers.js', base).href);
 
 let failures = 0;
 let checks = 0;
@@ -215,7 +216,7 @@ const visibleRows = () => treeEl.children.filter((r) => !r.classes.has('is-hidde
 
 check('无搜索时全部可见', visibleRows().length === 6, `实际 ${visibleRows().length} 行`);
 
-initTreeSearch();
+initTree({ onSelect: () => {} });
 getEl('treeSearch').value = 'cancel';
 // Drive the same path the input event uses.
 getEl('treeSearch').listeners.input.forEach((fn) => fn({ target: getEl('treeSearch') }));
@@ -252,6 +253,37 @@ check('重渲染后过滤仍然生效', rowBy('oid', 'o2').classes.has('is-hidde
 getEl('treeSearch').value = 'zzzz';
 getEl('treeSearch').listeners.input.forEach((fn) => fn({ target: getEl('treeSearch') }));
 check('无命中时全部隐藏', visibleRows().length === 0, `实际 ${visibleRows().length} 行`);
+
+// Clearing the filter must restore the collapse state, not show every row.
+getEl('treeSearch').value = '';
+getEl('treeSearch').listeners.input.forEach((fn) => fn({ target: getEl('treeSearch') }));
+check('清空搜索后恢复折叠状态',
+  rowBy('oid', 'o1').classes.has('is-hidden') && rowBy('cid', 'c1').classes.has('is-hidden')
+  && !rowBy('pid', 'p1').classes.has('is-hidden'),
+  JSON.stringify(treeEl.children.map((r) => [r.dataset.kind, r.classes.has('is-hidden')])));
+
+// ---------- header edit rules ----------
+const projectHeaders = [{ name: 'X-Project', value: 'v1' }];
+
+const renamedOverride = { name: 'X-Custom', value: 'v2', fromProject: false };
+applyRowEdit(renamedOverride, 'name', 'X-Project', projectHeaders);
+check('改名到工程头且值不同仍保留覆盖', renamedOverride.fromProject === false,
+  JSON.stringify(renamedOverride));
+
+const renamedSame = { name: 'X-Custom', value: 'v1', fromProject: false };
+applyRowEdit(renamedSame, 'name', 'X-Project', projectHeaders);
+check('改名到工程头且值相同视为继承', renamedSame.fromProject === true,
+  JSON.stringify(renamedSame));
+
+const editedValue = { name: 'X-Project', value: 'v1', fromProject: true };
+applyRowEdit(editedValue, 'value', 'v2', projectHeaders);
+check('覆盖工程头的值转为样例覆盖', editedValue.fromProject === false,
+  JSON.stringify(editedValue));
+
+const renamedAway = { name: 'X-Project', value: 'v1', fromProject: true };
+applyRowEdit(renamedAway, 'name', 'X-Other', projectHeaders);
+check('改成非工程头名字转为样例覆盖', renamedAway.fromProject === false,
+  JSON.stringify(renamedAway));
 
 // ---------- timeout constants stay in step with the backend ----------
 check('超时上下限', TIMEOUT.MIN === 1000 && TIMEOUT.MAX === 600000 && TIMEOUT.DEFAULT === 60000);

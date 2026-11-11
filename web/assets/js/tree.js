@@ -2,10 +2,10 @@
 // navigation in tree/nav.js and CRUD actions in tree/actions.js.
 
 import { $ } from './dom.js';
-import { renderTree, syncSelection, toggleNode } from './tree/render.js';
+import { renderTree, syncSelection, toggleNode, applyCollapseVisibility } from './tree/render.js';
 import { initTreeNav, selectRow } from './tree/nav.js';
 import { initTreeActions, handleTreeAction, openProjectMenu, deleteNode } from './tree/actions.js';
-import { initTreeSearch } from './tree/search.js';
+import { initTreeSearch, getQuery } from './tree/search.js';
 
 export { renderTree, syncSelection, toggleNode, deleteNode };
 
@@ -13,8 +13,13 @@ export function initTree(options) {
   initTreeActions(options);
   initTreeNav({ onSelect: options.onSelect });
   // Filtering only changes visibility classes; the rows themselves stay put, so
-  // focus and scroll survive typing.
-  initTreeSearch();
+  // focus and scroll survive typing. Clearing the filter hands visibility back
+  // to the collapse state, which the filter deliberately overrode.
+  initTreeSearch({
+    onChange: () => {
+      if (!getQuery()) applyCollapseVisibility();
+    },
+  });
   const tree = $('tree');
   tree.addEventListener('click', handleTreeClick);
 }
