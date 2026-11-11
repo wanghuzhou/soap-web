@@ -122,7 +122,7 @@ const { renderTree, initTree } = await import(new URL('tree.js', base).href);
 const { buildCurl, sensitiveNames } = await import(new URL('curl.js', base).href);
 const { isSensitiveName, TIMEOUT } = await import(new URL('constants.js', base).href);
 const { applyTreeFilter, getQuery } = await import(new URL('tree/search.js', base).href);
-const { applyRowEdit } = await import(new URL('headers.js', base).href);
+const { applyRowEdit, mergeRows } = await import(new URL('headers.js', base).href);
 
 let failures = 0;
 let checks = 0;
@@ -261,6 +261,21 @@ check('清空搜索后恢复折叠状态',
   rowBy('oid', 'o1').classes.has('is-hidden') && rowBy('cid', 'c1').classes.has('is-hidden')
   && !rowBy('pid', 'p1').classes.has('is-hidden'),
   JSON.stringify(treeEl.children.map((r) => [r.dataset.kind, r.classes.has('is-hidden')])));
+
+// ---------- header merge rules ----------
+const merged = mergeRows(
+  [{ name: 'Content-Type', value: 'text/xml' }, { name: 'Authorization', value: 'Basic project' }],
+  [{ name: 'authorization', value: 'Bearer call' }, { name: 'X-Trace', value: '1' }],
+);
+check('合并请求头：样例覆盖工程同名头',
+  merged.length === 3 && merged[1].name === 'Authorization'
+  && merged[1].value === 'Bearer call' && merged[1].fromProject === false,
+  JSON.stringify(merged));
+check('合并请求头：空名字被丢弃',
+  mergeRows([{ name: '  ', value: 'x' }], [{ name: '', value: 'y' }, { name: ' Ok ', value: '1' }])
+    .length === 1);
+check('合并请求头：空值保留',
+  mergeRows(null, [{ name: 'X-Flag', value: '' }])[0].value === '');
 
 // ---------- header edit rules ----------
 const projectHeaders = [{ name: 'X-Project', value: 'v1' }];

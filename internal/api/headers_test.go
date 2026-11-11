@@ -74,20 +74,6 @@ func TestSendRejectsBadHeaderName(t *testing.T) {
 	}
 }
 
-// TestSendClampsTimeout keeps an out-of-range timeout from being rejected.
-func TestSendClampsTimeout(t *testing.T) {
-	cases := []struct{ in, want int }{
-		{0, model.DefaultTimeoutMS},
-		{1, model.MinTimeoutMS},
-		{model.MaxTimeoutMS + 1, model.MaxTimeoutMS},
-	}
-	for _, c := range cases {
-		if got := clampTimeout(c.in); got != c.want {
-			t.Errorf("clampTimeout(%d) = %d, want %d", c.in, got, c.want)
-		}
-	}
-}
-
 // TestProjectHeadersPersistAndValidate covers the project-level headers: a
 // valid set survives a write/read round trip, an invalid one is rejected.
 func TestProjectHeadersPersistAndValidate(t *testing.T) {

@@ -37,9 +37,11 @@ func Send(req model.SendRequest, proxyCfg *model.ProxySettings) model.SendRespon
 		method = http.MethodPost
 	}
 
+	// The API layer clamps the value; this lower-level helper only supplies the
+	// default so direct callers (tests, importers) behave the same way.
 	timeout := time.Duration(req.TimeoutMS) * time.Millisecond
 	if timeout <= 0 {
-		timeout = 60 * time.Second
+		timeout = time.Duration(model.DefaultTimeoutMS) * time.Millisecond
 	}
 
 	var bodyReader io.Reader

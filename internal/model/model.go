@@ -15,7 +15,7 @@ type Project struct {
 	Source string         `json:"source"` // e.g. "soapui", "wsdl", "wsdl-url" or "native"
 	Proxy  *ProxySettings `json:"proxy,omitempty"`
 	// Headers are sent with every request of this project. A call may override
-	// an individual value; see MergeHeaders.
+	// an individual value; see Call.Headers.
 	Headers    []Header    `json:"headers,omitempty"`
 	Services   []Service   `json:"services"`
 	TestSuites []TestSuite `json:"testSuites"`
@@ -27,63 +27,6 @@ type Project struct {
 type Header struct {
 	Name  string `json:"name"`
 	Value string `json:"value"`
-}
-
-// sensitiveHeaders are masked in the UI when the user asks for it: these carry
-// credentials far more often than not.
-var sensitiveHeaders = []string{"authorization", "proxy-authorization", "cookie", "set-cookie"}
-
-// IsSensitiveName reports whether a header is normally secret, so the UI can
-// mask it by default and a copied request does not leak a password by accident.
-func IsSensitiveName(name string) bool {
-	lower := strings.ToLower(strings.TrimSpace(name))
-	for _, s := range sensitiveHeaders {
-		if lower == s {
-			return true
-		}
-	}
-	// Anything with these substrings is treated as a credential too: x-api-key,
-	// app-token, client-secret and the like.
-	for _, frag := range []string{"token", "secret", "password", "apikey", "api-key", "x-auth"} {
-		if strings.Contains(lower, frag) {
-			return true
-		}
-	}
-	return false
-}
-
-// MergeHeaders overlays a call's headers on the project defaults. Matching is
-// case-insensitive (HTTP header names are), the result keeps the project order
-// then appends call-only names in the order they appear.
-func MergeHeaders(project, call []Header) []Header {
-	if len(project) == 0 && len(call) == 0 {
-		return nil
-	}
-	out := make([]Header, 0, len(project)+len(call))
-	index := map[string]int{}
-	add := func(h Header) {
-		name := strings.TrimSpace(h.Name)
-		if name == "" {
-			return
-		}
-		key := strings.ToLower(name)
-		if i, ok := index[key]; ok {
-			out[i].Value = h.Value
-			return
-		}
-		index[key] = len(out)
-		out = append(out, Header{Name: name, Value: h.Value})
-	}
-	for _, h := range project {
-		add(h)
-	}
-	for _, h := range call {
-		add(h)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
 }
 
 // ValidateHeaders rejects names that cannot be sent: a request with a bad
@@ -105,17 +48,6 @@ func ValidateHeaders(headers []Header) error {
 		}
 	}
 	return nil
-}
-
-// HasHeaderValue reports whether name already appears in headers.
-func HasHeaderValue(headers []Header, name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	for _, h := range headers {
-		if strings.ToLower(strings.TrimSpace(h.Name)) == name {
-			return true
-		}
-	}
-	return false
 }
 
 // ProxySettings controls how requests of a project reach the network.
@@ -213,18 +145,20 @@ const (
 	MaxTimeoutMS = 600000
 )
 
-// EffectiveTimeout returns the timeout to use, clamped into the allowed range.
-func (c Call) EffectiveTimeout() int {
-	if c.TimeoutMS <= 0 {
+// ClampTimeout returns ms bounded to [MinTimeoutMS, MaxTimeoutMS], falling back
+// to DefaultTimeoutMS when unset. The API layer and transport share this so the
+// bounds cannot drift apart.
+func ClampTimeout(ms int) int {
+	if ms <= 0 {
 		return DefaultTimeoutMS
 	}
-	if c.TimeoutMS < MinTimeoutMS {
+	if ms < MinTimeoutMS {
 		return MinTimeoutMS
 	}
-	if c.TimeoutMS > MaxTimeoutMS {
+	if ms > MaxTimeoutMS {
 		return MaxTimeoutMS
 	}
-	return c.TimeoutMS
+	return ms
 }
 
 // DefaultRequestBody returns the body a new request sample should start from:

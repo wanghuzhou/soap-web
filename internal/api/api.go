@@ -150,7 +150,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	req.TimeoutMS = clampTimeout(req.TimeoutMS)
+	req.TimeoutMS = model.ClampTimeout(req.TimeoutMS)
 
 	// Resolve the project's proxy settings (if the request belongs to a project).
 	var proxyCfg *model.ProxySettings
@@ -178,22 +178,6 @@ func headersFromMap(m map[string]string) []model.Header {
 		out = append(out, model.Header{Name: k, Value: v})
 	}
 	return out
-}
-
-// clampTimeout keeps a client-supplied timeout inside the allowed range instead
-// of rejecting it: an out-of-range value is a UI mistake, not a reason to
-// refuse to send.
-func clampTimeout(ms int) int {
-	if ms <= 0 {
-		return model.DefaultTimeoutMS
-	}
-	if ms < model.MinTimeoutMS {
-		return model.MinTimeoutMS
-	}
-	if ms > model.MaxTimeoutMS {
-		return model.MaxTimeoutMS
-	}
-	return ms
 }
 
 // handleImportSoapUI parses an uploaded SoapUI project and persists it.

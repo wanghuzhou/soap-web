@@ -1,7 +1,7 @@
 // Request headers editor.
 //
-// A sample sends the project's headers overlaid by its own (the backend's
-// MergeHeaders does the same). The panel shows the merged result, so what the
+// A sample sends the project's headers overlaid by its own (mergeRows below
+// implements the same rule). The panel shows the merged result, so what the
 // user sees is what gets sent. Rows coming from the project are marked 工程 and
 // can only be overridden — to change one everywhere, edit the project.
 //
@@ -99,7 +99,7 @@ function normaliseList(list) {
 // mergeRows overlays the sample's headers on the project's, matching names
 // case-insensitively like the backend. Project order is kept; call-only names
 // follow in their own order.
-function mergeRows(projectHeaders, callHeaders) {
+export function mergeRows(projectHeaders, callHeaders) {
   const out = [];
   const index = new Map();
   const add = (h, fromProject) => {

@@ -20,7 +20,6 @@ const SENSITIVE_FRAGMENTS = ['token', 'secret', 'password', 'apikey', 'api-key',
 
 // isSensitiveName reports whether a header should be masked by default and
 // flagged when copying a request, so a password is not leaked by accident.
-// Kept in sync with model.IsSensitiveName on the Go side.
 export function isSensitiveName(name) {
   const lower = String(name || '').trim().toLowerCase();
   if (!lower) return false;
