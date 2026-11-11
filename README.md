@@ -47,6 +47,19 @@ go build -o bin\soapweb.exe .\cmd\soapweb
 
 程序会尝试自动打开默认浏览器；如未打开，请手动访问 http://127.0.0.1:8420
 
+### 桌面壳 POC（Windows）
+
+在原生窗口里运行同一套后端与前端（Wails v2 + WebView2），不监听端口：
+
+```bash
+go build -tags production -ldflags "-H windowsgui" -o bin\soapweb-desktop.exe .\cmd\soapweb-desktop
+.\bin\soapweb-desktop.exe
+```
+
+- 数据目录默认与浏览器版一致（可执行文件旁 `data`），也可用 `-data` 指定；WebView2 配置存放在数据目录下的 `webview2/`。
+- 需要系统已安装 WebView2 Runtime（Windows 10/11 通常自带）。
+- 这是 POC：暂未包含单实例锁、菜单/托盘、代码签名；浏览器入口 `cmd/soapweb` 不受影响。
+
 ### Windows 提示“未知发布者”
 
 `go build` 生成的是未签名可执行文件，Windows SmartScreen / UAC 可能显示“未知发布者”。这是系统对未签名程序的正常提示，不代表程序损坏或有病毒：
