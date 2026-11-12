@@ -724,7 +724,10 @@ body.resizing { cursor: col-resize; user-select: none; }
   position: absolute;
   inset: 0;
   margin: 0;
-  padding-right: 26px; /* match textarea's scrollbar gutter (16px + 10px) */
+  /* 右内边距由 editor/textarea.js 的 syncMetrics() 按 textarea 实测的滚动条宽度
+     覆盖（0 / 10 / 16px 视系统与引擎而定），这里只给一个不依赖滚动条的初值，
+     避免首帧比 textarea 更窄。 */
+  padding-right: 16px;
   overflow: hidden; /* scrolled programmatically in sync with the textarea */
   pointer-events: none;
   color: var(--text);

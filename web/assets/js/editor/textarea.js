@@ -15,6 +15,40 @@ export function initTextarea() {
   textarea.addEventListener('input', scheduleHighlight);
   textarea.addEventListener('scroll', syncScroll, { passive: true });
   textarea.addEventListener('keydown', handleEditorKeydown);
+  // 面板宽度（拖动分栏）变化、以及内容溢出导致滚动条出现/消失，都会改变
+  // textarea 的文字宽度，必须跟着重算。观察 textarea 自身的内容盒最可靠：
+  // 滚动条一出现，内容盒就变窄，回调立即触发。
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(() => syncMetrics());
+    ro.observe(textarea);
+    const wrap = $('editorWrap');
+    if (wrap) ro.observe(wrap);
+  }
+  syncMetrics();
+}
+
+// syncMetrics makes the highlight layer use exactly the textarea's text width.
+//
+// The two layers wrap independently, so any difference in text width makes them
+// break lines at different characters: the caret (drawn by the textarea) then
+// sits on a different character than the one the highlight layer paints there,
+// and typing lands somewhere other than where the caret appears.
+//
+// The textarea's scrollbar is what breaks a hardcoded padding: it is 0px with
+// macOS overlay scrollbars, 10px inside WKWebView, 16px when the system is set
+// to always show scroll bars. Measuring it is the only way to stay aligned.
+function syncMetrics() {
+  const textarea = $('requestBody');
+  const highlight = $('requestHighlight');
+  if (!textarea || !highlight) return;
+  const t = getComputedStyle(textarea);
+  const h = getComputedStyle(highlight);
+  const textWidth = textarea.clientWidth
+    - parseFloat(t.paddingLeft) - parseFloat(t.paddingRight);
+  // clientWidth already excludes the scrollbar, which is exactly the width the
+  // text wraps in. Give the highlight layer whatever right padding is left over.
+  const right = highlight.clientWidth - parseFloat(h.paddingLeft) - textWidth;
+  if (right > 0) highlight.style.paddingRight = right + 'px';
 }
 
 // scheduleHighlight coalesces a burst of input events into one highlight pass
@@ -33,6 +67,7 @@ export function renderHighlight() {
   const textarea = $('requestBody');
   const highlight = $('requestHighlight');
   if (!textarea || !highlight) return;
+  syncMetrics();
   highlight.innerHTML = highlightXML(textarea.value) + '\n';
   syncScroll();
 }
