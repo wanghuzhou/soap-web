@@ -178,18 +178,19 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # 3) 桌面版 macOS（x64 + arm64）：Wails 的 macOS 后端是 cgo + Objective-C，
-  #    只能在 macOS runner 上构建。用一个 Apple Silicon runner 交叉编译两个
-  #    GOARCH（Go 在 darwin 下会向 clang 传 -arch），再用 lipo 校验产物架构。
+  #    只能在 macOS runner 上构建。macOS 14 已于 2026-11-02 退役，这里用
+  #    macOS 15 的 Intel / Apple Silicon 原生 runner 各构建一次，再用 lipo
+  #    校验产物架构。
   # ---------------------------------------------------------------------------
   build-desktop-macos:
     name: Desktop darwin/${{ matrix.goarch }}
-    runs-on: macos-14
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { goarch: amd64, lipo: x86_64 }
-          - { goarch: arm64, lipo: arm64 }
+          - { runner: macos-15-intel, goarch: amd64, lipo: x86_64 }
+          - { runner: macos-15,       goarch: arm64, lipo: arm64 }
     steps:
       - uses: actions/checkout@v4
         with:
