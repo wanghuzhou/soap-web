@@ -806,6 +806,7 @@ body.resizing { cursor: col-resize; user-select: none; }
   display: flex;
   align-items: center;
   gap: 6px;
+  margin-left: auto;
 }
 .status-pill {
   padding: 3px 9px;
