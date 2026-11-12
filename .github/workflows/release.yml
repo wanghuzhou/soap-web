@@ -28,22 +28,18 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # 1) 交叉编译 + 分平台打包
-  #    全部在 ubuntu-latest 上跑：CGO_ENABLED=0 保证纯 Go 项目能交叉编译出
-  #    Windows / macOS 二进制，无需各自的 runner，zip/tar 命令也统一。
+  # 1) 浏览器/CLI 版：纯 Go 交叉编译，全部在 ubuntu-latest 上完成。
+  #    Windows arm64 与 Linux arm64 不再发布。
   # ---------------------------------------------------------------------------
-  build:
-    name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
+  build-web:
+    name: Web ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        # 只要三个平台各一个包的话，删掉对应的 arm64 行即可。
         include:
           - { goos: windows, goarch: amd64, ext: '.exe', pack: zip }
-          - { goos: windows, goarch: arm64, ext: '.exe', pack: zip }
           - { goos: linux,   goarch: amd64, ext: '',     pack: tar.gz }
-          - { goos: linux,   goarch: arm64, ext: '',     pack: tar.gz }
           - { goos: darwin,  goarch: amd64, ext: '',     pack: zip }
           - { goos: darwin,  goarch: arm64, ext: '',     pack: zip }
     steps:
@@ -133,12 +129,127 @@ jobs:
           retention-days: 7
 
   # ---------------------------------------------------------------------------
-  # 2) 全部构建成功后创建 release 并上传资产
+  # 2) 桌面版 Windows（仅 x64）：Wails 的 Windows 后端是纯 Go，关闭 CGO 后在
+  #    ubuntu 上交叉编译即可，无需 Windows runner 或 mingw。
+  # ---------------------------------------------------------------------------
+  build-desktop-windows:
+    name: Desktop windows/amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build desktop
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: '0'
+        run: |
+          set -euo pipefail
+          SAFE_TAG="${TAG//\//-}"
+          NAME="soap-web_${SAFE_TAG}_windows_amd64_desktop"
+          STAGE="dist/${NAME}"
+          mkdir -p "${STAGE}/bin"
+          go build -tags production -trimpath -ldflags='-s -w -H windowsgui' \
+            -o "${STAGE}/bin/soapweb-desktop.exe" ./cmd/soapweb-desktop
+          cp README.md "${STAGE}/"
+          printf '%s\r\n' \
+            'soap-web desktop (Windows x64)' \
+            '' \
+            'Run bin\soapweb-desktop.exe.' \
+            'Requires the WebView2 Runtime (Windows 10/11 usually includes it).' \
+            'Data lives in data\ next to the exe; use -data <dir> to override.' \
+            > "${STAGE}/DESKTOP-README.txt"
+          ( cd dist && zip -qr "${NAME}.zip" "${NAME}" )
+          rm -rf "${STAGE}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: soap-web-desktop-windows-amd64
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 3) 桌面版 macOS（x64 + arm64）：Wails 的 macOS 后端是 cgo + Objective-C，
+  #    只能在 macOS runner 上构建。用一个 Apple Silicon runner 交叉编译两个
+  #    GOARCH（Go 在 darwin 下会向 clang 传 -arch），再用 lipo 校验产物架构。
+  # ---------------------------------------------------------------------------
+  build-desktop-macos:
+    name: Desktop darwin/${{ matrix.goarch }}
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goarch: amd64, lipo: x86_64 }
+          - { goarch: arm64, lipo: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build .app
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          chmod +x build-macos.sh
+          VERSION="${TAG#v}" ./build-macos.sh
+          ACTUAL=$(lipo -archs "bin/soap-web.app/Contents/MacOS/soapweb-desktop")
+          echo "built architecture: ${ACTUAL}"
+          if [ "${ACTUAL}" != "${{ matrix.lipo }}" ]; then
+            echo "architecture mismatch: want ${{ matrix.lipo }}, got ${ACTUAL}" >&2
+            exit 1
+          fi
+
+      - name: Package
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          SAFE_TAG="${TAG//\//-}"
+          NAME="soap-web_${SAFE_TAG}_darwin_${GOARCH}_desktop"
+          STAGE="dist/${NAME}"
+          mkdir -p "${STAGE}"
+          cp -R "bin/soap-web.app" "${STAGE}/"
+          printf '%s\n' \
+            'soap-web desktop for macOS' \
+            '' \
+            'This build is ad-hoc signed. If macOS blocks it, run once:' \
+            '' \
+            '    xattr -dr com.apple.quarantine <this-folder>' \
+            '' \
+            'Data directory: ~/Library/Application Support/soap-web/data' \
+            > "${STAGE}/DESKTOP-README.txt"
+          ( cd dist && ditto -c -k --sequesterRsrc --keepParent "${NAME}" "${NAME}.zip" )
+          rm -rf "${STAGE}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: soap-web-desktop-darwin-${{ matrix.goarch }}
+          path: dist/*.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # 4) 全部构建成功后创建 release 并上传资产
   #    仅此 job 有写权限；并发写同一 release 的问题通过「只在这里写」规避。
   # ---------------------------------------------------------------------------
   publish:
     name: Create release and attach assets
-    needs: build
+    needs: [build-web, build-desktop-windows, build-desktop-macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

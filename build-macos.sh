@@ -7,6 +7,7 @@
 #     macOS 后端是 cgo + Objective-C，必须有 macOS SDK，无法在 Linux 上交叉编译
 #
 # 用法：./build-macos.sh        产物：bin/soap-web.app
+# 也可在 Apple Silicon 上交叉构建 x64：GOARCH=amd64 ./build-macos.sh
 set -eu
 
 cd "$(dirname "$0")"
@@ -21,7 +22,8 @@ rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
 
 # CGO 必须开启：Wails 通过 cgo 调用 Cocoa/WebKit。
-CGO_ENABLED=1 go build -tags production -trimpath \
+# GOARCH 由调用方决定（默认本机架构）；Go 在 darwin 下会向 clang 传 -arch。
+GOOS=darwin CGO_ENABLED=1 go build -tags production -trimpath \
 	-o "$OUT/Contents/MacOS/${EXEC_NAME}" ./cmd/soapweb-desktop
 
 cat > "$OUT/Contents/Info.plist" <<PLIST
