@@ -60,6 +60,20 @@ go build -tags production -ldflags "-H windowsgui" -o bin\soapweb-desktop.exe .\
 - 需要系统已安装 WebView2 Runtime（Windows 10/11 通常自带）。
 - 这是 POC：暂未包含单实例锁、菜单/托盘、代码签名；浏览器入口 `cmd/soapweb` 不受影响。
 
+### 桌面壳 POC（macOS）
+
+在原生窗口里运行同一套后端与前端（Wails v2 + WKWebView），不监听端口：
+
+```bash
+./build-macos.sh      # 产物 bin/soap-web.app
+open bin/soap-web.app
+```
+
+- 需要 Xcode Command Line Tools（`xcode-select --install`）。Wails 的 macOS 后端是 cgo + Objective-C，要链接 Cocoa/WebKit，**无法在 Linux 上交叉编译**（`CGO_ENABLED=0` 会报 `undefined: Frontend`，`CGO_ENABLED=1` 会找不到 darwin 的 clang）。
+- 必须带 `-tags production`。漏掉 tag 的二进制能启动，但会立刻打印 `Wails applications will not build without the correct build tags.` 后退出。
+- 数据目录默认在 `~/Library/Application Support/soap-web/data`：`.app` 包里的 `Contents/` 是被代码签名封印的资源，往里写数据会让签名失效（`codesign --verify` 报 `a sealed resource is missing or invalid`）。也可用 `-data` 指定其他目录。
+- `build-macos.sh` 用的是 ad-hoc 签名，够本机自测；分发给别人需要 Developer ID 证书 + 公证，否则首次打开会被 Gatekeeper 拦下。
+
 ### Windows 提示“未知发布者”
 
 `go build` 生成的是未签名可执行文件，Windows SmartScreen / UAC 可能显示“未知发布者”。这是系统对未签名程序的正常提示，不代表程序损坏或有病毒：

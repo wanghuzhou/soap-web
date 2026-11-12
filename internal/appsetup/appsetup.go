@@ -30,6 +30,15 @@ func ResolveDataDir(raw string) (dir, legacy string) {
 		if exe, err := os.Executable(); err == nil {
 			base = filepath.Dir(exe)
 		}
+		// macOS 的桌面版跑在 .app 包里，可执行文件位于 Contents/MacOS，而整个
+		// bundle 是被代码签名封印的资源。往里写 data/ 会让签名失效（codesign
+		// --verify 报 "a sealed resource is missing or invalid"），签名/公证
+		// 过的包在别人机器上会被 Gatekeeper 拒绝。所以默认改写到用户数据目录。
+		if insideMacAppBundle(base) {
+			if dir, err := UserDataDir(); err == nil {
+				return dir, ""
+			}
+		}
 		return filepath.Join(base, "data"), ""
 	}
 	if info, err := os.Stat(raw); err == nil {
@@ -90,6 +99,15 @@ func UserDataDir() (string, error) {
 		return filepath.Join(home, ".soap-web", "data"), nil
 	}
 	return "", errors.New("无法确定用户数据目录")
+}
+
+// insideMacAppBundle reports whether dir is the Contents/MacOS directory of a
+// macOS .app bundle, where writing files would break the code signature.
+func insideMacAppBundle(dir string) bool {
+	if runtime.GOOS != "darwin" {
+		return false
+	}
+	return strings.Contains(filepath.ToSlash(dir), ".app/Contents/MacOS")
 }
 
 // SamePath reports whether two paths point at the same directory, tolerating
