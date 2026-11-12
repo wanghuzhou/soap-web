@@ -123,6 +123,8 @@ const { buildCurl, sensitiveNames } = await import(new URL('curl.js', base).href
 const { isSensitiveName, TIMEOUT } = await import(new URL('constants.js', base).href);
 const { applyTreeFilter, getQuery } = await import(new URL('tree/search.js', base).href);
 const { applyRowEdit, mergeRows } = await import(new URL('headers.js', base).href);
+const { savedResponsePayload } = await import(new URL('response.js', base).href);
+const { fileSafeName } = await import(new URL('download.js', base).href);
 
 let failures = 0;
 let checks = 0;
@@ -299,6 +301,31 @@ const renamedAway = { name: 'X-Project', value: 'v1', fromProject: true };
 applyRowEdit(renamedAway, 'name', 'X-Other', projectHeaders);
 check('改成非工程头名字转为样例覆盖', renamedAway.fromProject === false,
   JSON.stringify(renamedAway));
+
+// ---------- response saving ----------
+const savedPayload = savedResponsePayload({
+  status: 200,
+  statusText: 'OK',
+  headers: { 'Content-Type': 'text/xml' },
+  body: '<x/>',
+  durationMs: 12,
+  size: 4,
+  truncated: true,
+  _ids: { pid: 'p' },
+  _saved: true,
+  _prettyHtml: '<span/>',
+});
+check('保存响应载荷只保留服务端字段',
+  savedPayload.status === 200 && savedPayload.body === '<x/>' && savedPayload.truncated === true
+  && !('_ids' in savedPayload) && !('_saved' in savedPayload) && !('_prettyHtml' in savedPayload),
+  JSON.stringify(savedPayload));
+check('保存响应载荷补默认值',
+  savedResponsePayload({}).body === '' && savedResponsePayload({}).status === 0);
+const sourceHeaders = { A: '1' };
+const clonedPayload = savedResponsePayload({ headers: sourceHeaders, body: 'x' });
+clonedPayload.headers.A = '2';
+check('保存响应载荷不共享响应头', sourceHeaders.A === '1');
+check('导出文件名过滤非法字符', fileSafeName('a/b:c*?', 'x') === 'a_b_c__');
 
 // ---------- timeout constants stay in step with the backend ----------
 check('超时上下限', TIMEOUT.MIN === 1000 && TIMEOUT.MAX === 600000 && TIMEOUT.DEFAULT === 60000);

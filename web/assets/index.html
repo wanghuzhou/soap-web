@@ -185,7 +185,10 @@
           <span id="respStatus" class="status-pill"></span>
           <span id="respTime" class="meta-item"></span>
           <span id="respSize" class="meta-item"></span>
-          <button id="btnCopyResp" class="btn ghost btn-xs">复制响应</button>
+          <div class="resp-actions">
+            <button id="btnCopyResp" class="btn ghost btn-xs">复制响应</button>
+            <button id="btnSaveResp" class="btn ghost btn-xs" title="保存到当前请求样例，下次打开可直接查看" disabled>保存响应</button>
+          </div>
         </div>
         <div id="respBody" class="resp-body">
           <div class="empty-state">

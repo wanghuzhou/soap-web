@@ -195,7 +195,24 @@ func cloneOperation(op model.Operation) model.Operation {
 func cloneCall(c model.Call) model.Call {
 	out := c
 	out.Headers = cloneHeaders(c.Headers)
+	out.Response = cloneSavedResponse(c.Response)
 	return out
+}
+
+// cloneSavedResponse deep-copies the response and its header map, preserving nil
+// so an untouched sample keeps its JSON shape.
+func cloneSavedResponse(r *model.SavedResponse) *model.SavedResponse {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	if r.Headers != nil {
+		out.Headers = make(map[string]string, len(r.Headers))
+		for k, v := range r.Headers {
+			out.Headers[k] = v
+		}
+	}
+	return &out
 }
 
 func cloneTestSuite(ts model.TestSuite) model.TestSuite {
@@ -472,7 +489,30 @@ func (s *Store) UpdateCall(projectID, serviceID, opID string, call model.Call) e
 		op := &list[pi].Services[si].Operations[oi]
 		for ci := range op.Calls {
 			if op.Calls[ci].ID == call.ID {
+				// The saved response is written only by UpdateCallResponse: a
+				// request edit must not erase it by omitting the field.
+				call.Response = op.Calls[ci].Response
 				op.Calls[ci] = cloneCall(call)
+				return list, nil
+			}
+		}
+		return nil, ErrNotFound
+	})
+}
+
+// UpdateCallResponse stores (or, with nil, clears) the saved response of one
+// request sample. A narrow write keeps a response save from overwriting
+// concurrent request edits made in another tab.
+func (s *Store) UpdateCallResponse(projectID, serviceID, opID, callID string, resp *model.SavedResponse) error {
+	return s.commit(func(list []model.Project) ([]model.Project, error) {
+		pi, si, oi, ok := locateOperation(list, projectID, serviceID, opID)
+		if !ok {
+			return nil, ErrNotFound
+		}
+		op := &list[pi].Services[si].Operations[oi]
+		for ci := range op.Calls {
+			if op.Calls[ci].ID == callID {
+				op.Calls[ci].Response = cloneSavedResponse(resp)
 				return list, nil
 			}
 		}
@@ -517,6 +557,7 @@ func (s *Store) DuplicateCall(projectID, serviceID, opID, callID string) (model.
 			c.ID = NewID()
 			c.Title = copyTitle(c.Title, op.Calls)
 			c.Headers = append([]model.Header(nil), c.Headers...)
+			c.Response = cloneSavedResponse(c.Response)
 			op.Calls = append(op.Calls, c)
 			out = c
 			return list, nil

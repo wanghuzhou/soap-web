@@ -802,6 +802,11 @@ body.resizing { cursor: col-resize; user-select: none; }
   flex: none;
   border-bottom: 1px solid var(--border-soft);
 }
+.resp-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .status-pill {
   padding: 3px 9px;
   border-radius: 999px;

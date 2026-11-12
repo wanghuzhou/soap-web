@@ -84,6 +84,8 @@ func writeInterface(b *bytes.Buffer, svc model.Service) {
 	b.WriteString("  </con:interface>\n")
 }
 
+// writeCall writes one <con:call>. The saved response is a native extension and
+// is deliberately omitted: this minimal SoapUI mapping has no field for it.
 func writeCall(b *bytes.Buffer, svc model.Service, op model.Operation, c model.Call) {
 	title := c.Title
 	if title == "" {

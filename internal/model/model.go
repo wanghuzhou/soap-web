@@ -131,6 +131,52 @@ type Call struct {
 	Headers []Header `json:"headers,omitempty"`
 	// TimeoutMS bounds this sample's request. 0 means "use the default".
 	TimeoutMS int `json:"timeoutMs,omitempty"`
+	// Response is the last response the user saved for this sample. It is
+	// persisted with the workspace so reopening the sample shows it without
+	// sending the request again.
+	Response *SavedResponse `json:"response,omitempty"`
+}
+
+// SavedResponse is a response kept with a request sample. It deliberately
+// mirrors the useful parts of SendResponse but omits transient fields.
+type SavedResponse struct {
+	Status     int               `json:"status"`
+	StatusText string            `json:"statusText"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
+	DurationMS int64             `json:"durationMs"`
+	Size       int               `json:"size"`
+	Truncated  bool              `json:"truncated,omitempty"`
+}
+
+// MaxSavedResponseBytes caps a persisted response. It matches the transport
+// read cap, so anything the UI could display can also be saved.
+const MaxSavedResponseBytes = 16 << 20
+
+// ValidateSavedResponse rejects a response body larger than the cap.
+func ValidateSavedResponse(r *SavedResponse) error {
+	if r == nil {
+		return nil
+	}
+	if len(r.Body) > MaxSavedResponseBytes {
+		return fmt.Errorf("响应内容超过 %d MB 上限", MaxSavedResponseBytes>>20)
+	}
+	return nil
+}
+
+// ValidateProjectResponses checks every saved response in a project, so a
+// hand-written workspace JSON cannot bypass the size limit.
+func ValidateProjectResponses(p Project) error {
+	for _, svc := range p.Services {
+		for _, op := range svc.Operations {
+			for _, c := range op.Calls {
+				if err := ValidateSavedResponse(c.Response); err != nil {
+					return fmt.Errorf("请求样例「%s」: %w", c.Title, err)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // DefaultTimeoutMS applies when neither the sample nor the caller sets one.

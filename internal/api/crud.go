@@ -38,6 +38,7 @@ func (s *Server) registerProjectRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/projects/{pid}/services/{sid}/operations/{oid}/calls/{cid}", s.handleUpdateCall)
 	mux.HandleFunc("DELETE /api/projects/{pid}/services/{sid}/operations/{oid}/calls/{cid}", s.handleDeleteCall)
 	mux.HandleFunc("POST /api/projects/{pid}/services/{sid}/operations/{oid}/calls/{cid}/duplicate", s.handleDuplicateCall)
+	mux.HandleFunc("PUT /api/projects/{pid}/services/{sid}/operations/{oid}/calls/{cid}/response", s.handleUpdateCallResponse)
 }
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
@@ -63,6 +64,9 @@ func validateProject(project model.Project) error {
 				}
 			}
 		}
+	}
+	if err := model.ValidateProjectResponses(project); err != nil {
+		return err
 	}
 	return nil
 }
@@ -233,6 +237,10 @@ func (s *Server) handleAddCall(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if err := model.ValidateSavedResponse(call.Response); err != nil {
+		writeErr(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
 	saved, err := storeFrom(r).AddCall(r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), call)
 	if err != nil {
 		mapStoreErr(w, err)
@@ -268,6 +276,27 @@ func (s *Server) handleUpdateCall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, call)
+}
+
+// handleUpdateCallResponse persists (or, with a JSON null, clears) the response
+// saved with one request sample. A narrow write keeps it from overwriting
+// concurrent request edits.
+func (s *Server) handleUpdateCallResponse(w http.ResponseWriter, r *http.Request) {
+	resp, ok := decodeJSON[*model.SavedResponse](w, r)
+	if !ok {
+		return
+	}
+	if err := model.ValidateSavedResponse(resp); err != nil {
+		writeErr(w, http.StatusRequestEntityTooLarge, err.Error())
+		return
+	}
+	if err := storeFrom(r).UpdateCallResponse(
+		r.PathValue("pid"), r.PathValue("sid"), r.PathValue("oid"), r.PathValue("cid"), resp,
+	); err != nil {
+		mapStoreErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "response": resp})
 }
 
 func (s *Server) handleDeleteCall(w http.ResponseWriter, r *http.Request) {

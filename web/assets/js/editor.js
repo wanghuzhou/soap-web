@@ -212,6 +212,18 @@ export function loadNode(node, kind, path = {}) {
   setTimeoutInput(node.timeoutMs);
   const autoFormat = $('autoFormat') ? $('autoFormat').checked : false;
   setRequestBody(node.request || '', autoFormat);
+  // A sample may carry a response saved earlier; show it unless the pane is
+  // already showing an in-memory response for this same sample.
+  if (!state.response || !sameIds(state.response._ids, path.ids)) {
+    state.response = node.response
+      ? Object.assign({}, node.response, {
+        headers: Object.assign({}, node.response.headers || {}),
+        _ids: path.ids,
+        _saved: true,
+      })
+      : null;
+    renderResponse();
+  }
   updateReqBadge();
   updateEditButtons();
   syncSelection();

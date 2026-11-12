@@ -5,6 +5,7 @@
 import { $ } from './dom.js';
 import { state } from './state.js';
 import { apiJSON, apiUpload, path } from './api.js';
+import { downloadText, fileSafeName } from './download.js';
 import { isDirty } from './editor.js';
 import { applyWorkspace, enterWorkspace } from './workspace.js';
 import { toast } from './toast.js';
@@ -55,20 +56,11 @@ async function confirmExport() {
 // downloadJSON turns the exported array into a Blob download. The backend
 // returns a bare array so the file can be imported back directly.
 function downloadJSON(projects, name) {
-  const blob = new Blob([JSON.stringify(projects, null, 2) + '\n'], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileSafeName(name) + '.json';
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  // Revoking immediately can cancel the download in some browsers.
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function fileSafeName(name) {
-  return String(name || 'workspace').replace(/[\\/:*?"<>|]/g, '_').trim() || 'workspace';
+  downloadText(
+    fileSafeName(name, 'workspace') + '.json',
+    JSON.stringify(projects, null, 2) + '\n',
+    'application/json',
+  );
 }
 
 // pickWorkspaceFile is wired to the workspace menu.

@@ -117,6 +117,9 @@ func (r *Registry) Import(rawName string, projects []model.Project) (Info, error
 		if err := projects[i].Proxy.Validate(); err != nil {
 			return Info{}, fmt.Errorf("%w：工程「%s」的代理配置无效: %v", ErrInvalidProject, projects[i].Name, err)
 		}
+		if err := model.ValidateProjectResponses(projects[i]); err != nil {
+			return Info{}, fmt.Errorf("%w：工程「%s」: %v", ErrInvalidProject, projects[i].Name, err)
+		}
 		store.EnsureIDs(&projects[i])
 	}
 
