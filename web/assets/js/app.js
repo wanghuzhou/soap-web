@@ -13,6 +13,7 @@ import { initLayout } from './layout.js';
 import { initWsdlUrl } from './wsdlurl.js';
 import { initWorkspace, loadWorkspaceInfo, handleServerWorkspace } from './workspace.js';
 import { initWorkspaceIO, openExportDialog, pickWorkspaceFile } from './workspaceio.js';
+import { TIMEOUT, applyServerLimits } from './constants.js';
 
 let pendingFileMode = null;
 
@@ -37,7 +38,21 @@ async function checkHealth() {
   const ok = !!health;
   setServerState(ok, ok ? '就绪' : '已断开');
   // The heartbeat doubles as the workspace-change detector for other tabs.
-  if (ok) handleServerWorkspace(health.workspace);
+  if (ok) {
+    // Adopt the server's timeout bounds so the editor validates against the
+    // numbers the server actually enforces; a change is rare, and the editor's
+    // placeholder is refreshed only when they really differ.
+    if (applyServerLimits(health.limits)) refreshTimeoutPlaceholder();
+    handleServerWorkspace(health.workspace);
+  }
+}
+
+// refreshTimeoutPlaceholder updates the "留空按 N 秒" hint after the server's
+// default has been adopted. It must not touch the value the user is typing.
+function refreshTimeoutPlaceholder() {
+  const input = $('timeoutMs');
+  if (!input) return;
+  input.placeholder = String(TIMEOUT.DEFAULT);
 }
 
 function startHealthMonitor() {

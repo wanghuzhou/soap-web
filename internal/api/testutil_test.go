@@ -1,7 +1,9 @@
 package api
 
 import (
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"soapweb/internal/store"
@@ -29,4 +31,18 @@ func newTestServerWithRegistry(t *testing.T) (*Server, *http.ServeMux, *workspac
 	mux := http.NewServeMux()
 	srv.Register(mux)
 	return srv, mux, reg
+}
+
+// getRaw performs a GET and returns the raw body with the recorder, for tests
+// that need the exact JSON shape rather than a decoded struct.
+func getRaw(t *testing.T, mux *http.ServeMux, method, path string) ([]byte, *httptest.ResponseRecorder) {
+	t.Helper()
+	req := httptest.NewRequest(method, path, nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	body, err := io.ReadAll(rec.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	return body, rec
 }

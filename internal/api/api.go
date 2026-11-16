@@ -128,6 +128,15 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":    "ok",
 		"workspace": s.Workspaces.CurrentInfo(),
+		// limits carries the bounds the server actually enforces, so the editor
+		// validates against the same numbers instead of a hand-copied duplicate.
+		// Both sides used to define 1000 / 60000 / 600000 separately; changing
+		// one silently made the client accept a value the server then rewrote.
+		"limits": map[string]int{
+			"minTimeoutMs":     model.MinTimeoutMS,
+			"defaultTimeoutMs": model.DefaultTimeoutMS,
+			"maxTimeoutMs":     model.MaxTimeoutMS,
+		},
 	})
 }
 

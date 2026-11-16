@@ -120,7 +120,7 @@ const base = new URL('../assets/js/', import.meta.url);
 const { state } = await import(new URL('state.js', base).href);
 const { renderTree, initTree } = await import(new URL('tree.js', base).href);
 const { buildCurl, sensitiveNames } = await import(new URL('curl.js', base).href);
-const { isSensitiveName, TIMEOUT } = await import(new URL('constants.js', base).href);
+const { isSensitiveName, TIMEOUT, applyServerLimits } = await import(new URL('constants.js', base).href);
 const { applyTreeFilter, getQuery } = await import(new URL('tree/search.js', base).href);
 const { applyRowEdit, mergeRows } = await import(new URL('headers.js', base).href);
 const { savedResponsePayload } = await import(new URL('response.js', base).href);
@@ -327,8 +327,29 @@ clonedPayload.headers.A = '2';
 check('保存响应载荷不共享响应头', sourceHeaders.A === '1');
 check('导出文件名过滤非法字符', fileSafeName('a/b:c*?', 'x') === 'a_b_c__');
 
-// ---------- timeout constants stay in step with the backend ----------
-check('超时上下限', TIMEOUT.MIN === 1000 && TIMEOUT.MAX === 600000 && TIMEOUT.DEFAULT === 60000);
+// ---------- timeout limits come from the server ----------
+// The editor must validate against the numbers /api/health reports, not against
+// a hand-copied duplicate. These checks simulate the server changing its bounds:
+// the client has to follow instead of silently accepting a value the server
+// would then clamp.
+const serverLimits = { minTimeoutMs: 2000, defaultTimeoutMs: 90000, maxTimeoutMs: 120000 };
+check('采纳服务端超时上下限', applyServerLimits(serverLimits) === true
+  && TIMEOUT.MIN === 2000 && TIMEOUT.DEFAULT === 90000 && TIMEOUT.MAX === 120000,
+  JSON.stringify(TIMEOUT));
+
+check('服务端数值未变时不重复刷新', applyServerLimits(serverLimits) === false);
+
+// A partial or nonsensical payload must not break validation: keep the old
+// numbers rather than adopting min > max or a zero default.
+const before = { ...TIMEOUT };
+applyServerLimits({ minTimeoutMs: 5000, maxTimeoutMs: 1000 });
+check('拒绝 min > max 的服务端数值',
+  TIMEOUT.MIN === before.MIN && TIMEOUT.MAX === before.MAX, JSON.stringify(TIMEOUT));
+applyServerLimits(null);
+applyServerLimits({ minTimeoutMs: 'x' });
+check('拒绝缺失或非数字的服务端数值',
+  TIMEOUT.MIN === before.MIN && TIMEOUT.DEFAULT === before.DEFAULT && TIMEOUT.MAX === before.MAX,
+  JSON.stringify(TIMEOUT));
 
 // ---------- report ----------
 if (failures === 0) {

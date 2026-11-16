@@ -27,9 +27,30 @@ export function isSensitiveName(name) {
   return SENSITIVE_FRAGMENTS.some((frag) => lower.includes(frag));
 }
 
-// TIME limits mirror model.MinTimeoutMS / DefaultTimeoutMS / MaxTimeoutMS.
+// TIME limits. The numbers below are the fallback used before /api/health has
+// answered; the server is the authority and applyServerLimits() replaces them,
+// so the editor can never accept a timeout the server would silently clamp (or
+// reject one it would accept). A local copy is still needed because the editor
+// renders before the first health probe returns.
 export const TIMEOUT = {
   MIN: 1000,
   DEFAULT: 60000,
   MAX: 600000,
 };
+
+// applyServerLimits adopts the bounds reported by /api/health. Missing or
+// nonsensical values are ignored so a stale/partial response cannot break
+// validation; the previous numbers stay in place.
+export function applyServerLimits(limits) {
+  if (!limits) return false;
+  const min = Number(limits.minTimeoutMs);
+  const def = Number(limits.defaultTimeoutMs);
+  const max = Number(limits.maxTimeoutMs);
+  if (!Number.isFinite(min) || !Number.isFinite(def) || !Number.isFinite(max)) return false;
+  if (min <= 0 || max < min || def < min || def > max) return false;
+  if (TIMEOUT.MIN === min && TIMEOUT.DEFAULT === def && TIMEOUT.MAX === max) return false;
+  TIMEOUT.MIN = min;
+  TIMEOUT.DEFAULT = def;
+  TIMEOUT.MAX = max;
+  return true;
+}
