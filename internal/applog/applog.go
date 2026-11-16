@@ -32,6 +32,9 @@ const (
 	// tab's 409, a validation failure) are useful when reading the log later
 	// but would flood the console the user is watching.
 	debugPrefix = "[调试] "
+	// continuationPrefix marks the second and later lines of one record whose
+	// message embedded a newline, so they cannot pass for separate entries.
+	continuationPrefix = "↳ "
 )
 
 // Debugf writes a file-only log line. The console stays for warnings and
@@ -145,14 +148,43 @@ func (s *sink) Write(p []byte) (int, error) {
 	if s.file == nil {
 		return len(p), nil
 	}
-	line := s.now().Format("2006-01-02 15:04:05.000") + " " + msg + "\n"
-	n, err := s.file.WriteString(line)
+	// One record must stay one physical line. Messages regularly embed user
+	// text (a workspace or project name, a URL, an upstream error body), and a
+	// bare newline in there used to produce a line with no timestamp of its own —
+	// indistinguishable from a genuine log record. A reader could not tell a
+	// forged "[错误] ..." from a real one. Continuation lines are indented and
+	// marked instead.
+	n, err := s.file.WriteString(s.formatLine(msg))
 	s.size += int64(n)
 	if err != nil {
 		// A full disk or a removed file must not kill the app.
 		_, _ = fmt.Fprintf(os.Stderr, "写入日志文件 %s 失败: %v\n", s.path, err)
 	}
 	return len(p), nil
+}
+
+// formatLine renders one record as a single timestamped line, folding any
+// embedded newlines into marked continuations so a message cannot forge log
+// entries. The caller holds s.mu and has already defaulted s.now.
+func (s *sink) formatLine(msg string) string {
+	stamp := s.now().Format("2006-01-02 15:04:05.000")
+	lines := strings.Split(msg, "\n")
+	var b strings.Builder
+	b.WriteString(stamp)
+	b.WriteByte(' ')
+	for i, ln := range lines {
+		ln = strings.TrimSuffix(ln, "\r")
+		if i > 0 {
+			// Align continuations under the timestamp column and mark them so
+			// they read as part of the previous record.
+			b.WriteString("\n")
+			b.WriteString(strings.Repeat(" ", len(stamp)))
+			b.WriteString(continuationPrefix)
+		}
+		b.WriteString(ln)
+	}
+	b.WriteString("\n")
+	return b.String()
 }
 
 // rotateLocked closes the active file, renames it aside, and opens a fresh one.
