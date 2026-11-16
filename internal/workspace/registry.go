@@ -22,6 +22,9 @@ type Registry struct {
 	settings settings
 	active   *store.Store
 	activeID string
+	// lastBackup is the trash file created by the most recent backupLocked, so a
+	// failed settings write can remove it again. Guarded by mu.
+	lastBackup string
 }
 
 // DataDir returns the directory that holds settings.json and the workspace
@@ -199,11 +202,26 @@ func (r *Registry) Rename(id, rawName string) (Info, error) {
 	return Info{ID: id, Name: name}, nil
 }
 
-// Delete removes a workspace and moves its file to data/trash so an accidental
-// click never destroys projects outright.
+// Delete removes a workspace and archives its file into data/trash so an
+// accidental click never destroys projects outright.
 //
 // Deleting the active workspace switches to the first other workspace that
 // loads; the last remaining workspace cannot be deleted.
+//
+// The steps are ordered so that a failure leaves everything as it was:
+//
+//	1. copy the file into trash (the original stays put, so the registry keeps a
+//	   workspace whose file still exists);
+//	2. write settings.json;
+//	3. move the active pointer, now that the removal is on disk;
+//	4. delete the original.
+//
+// Doing it the other way round — move the file aside, then write settings — is
+// how a workspace could be lost silently: when the settings write failed, the
+// rollback's error was discarded, so the file stayed in trash while the in-memory
+// store still pointed at it. Every later save then recreated the file at the old
+// path (WriteAtomic uses os.WriteFile) and reported success for a workspace that
+// no longer existed in settings.json and vanished on the next restart.
 func (r *Registry) Delete(id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -238,57 +256,88 @@ func (r *Registry) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	trashPath, moved, err := r.moveToTrash(p)
-	if err != nil {
-		return fmt.Errorf("移入回收站失败: %w", err)
-	}
-	if err := r.saveSettings(next); err != nil {
-		if moved {
-			_ = os.Rename(trashPath, p)
-		}
-		return err
+
+	// 1. Take the backup first, but by copying rather than moving. A copy leaves
+	// the workspace file in place, so if the settings write below fails nothing
+	// has moved and the caller can simply retry.
+	if err := r.backupLocked(p, w.ID); err != nil {
+		return fmt.Errorf("删除工作空间「%s」失败：无法创建备份，工作空间未删除: %w", w.Name, err)
 	}
 
+	// 2. Persist the removal. On failure, remove the stale backup so a retry
+	// does not accumulate copies of a workspace that still exists. The message
+	// names the workspace: the underlying error is a bare rename failure that
+	// says nothing about what the user was doing.
+	if err := r.saveSettings(next); err != nil {
+		r.discardBackupLocked()
+		return fmt.Errorf("删除工作空间「%s」失败：保存工作空间设置失败，工作空间未删除: %w", w.Name, err)
+	}
 	r.settings = next
+
+	// 3. From here the workspace is logically gone, so the active pointer must
+	// follow before anything else can observe the old one.
 	if nextStore != nil {
 		r.active = nextStore
 		r.activeID = nextID
+	}
+
+	// 4. Drop the original. The backup is already on disk, so this failing only
+	// leaves a stray file behind — the workspace is gone from settings.json
+	// either way and can never be written again by accident.
+	if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+		log.Printf("工作空间「%s」已删除并备份，但原文件 %s 移除失败（可手动删除）：%v", w.Name, p, err)
 	}
 	log.Printf("已删除工作空间：%s", w.Name)
 	return nil
 }
 
-// moveToTrash renames a workspace file into data/trash. It reports whether a
-// file was actually moved, so the caller can roll back on a failed settings
-// write.
-func (r *Registry) moveToTrash(p string) (string, bool, error) {
-	if _, err := os.Stat(p); err != nil {
+// backupLocked copies the workspace file into data/trash so an accidental delete
+// stays recoverable. It copies instead of renaming so the original keeps serving
+// the registry until settings.json has committed the removal.
+func (r *Registry) backupLocked(p, id string) error {
+	info, err := os.Stat(p)
+	if err != nil {
 		if os.IsNotExist(err) {
-			return "", false, nil
+			// Nothing to back up (file already gone). The entry can still be
+			// removed; this is the "settings points at a missing file" repair.
+			return nil
 		}
-		return "", false, err
+		return err
 	}
 	dir := filepath.Join(r.dir, trashDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", false, err
+		return err
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return err
 	}
 	base := strings.TrimSuffix(filepath.Base(p), filepath.Ext(p))
 	stamp := time.Now().Format("20060102-150405")
 	target := filepath.Join(dir, base+"-"+stamp+".json")
 	for n := 2; ; n++ {
-		_, err := os.Stat(target)
-		if os.IsNotExist(err) {
+		if _, statErr := os.Stat(target); os.IsNotExist(statErr) {
 			break
-		}
-		if err != nil {
-			return "", false, err
+		} else if statErr != nil {
+			return statErr
 		}
 		target = filepath.Join(dir, fmt.Sprintf("%s-%s-%d.json", base, stamp, n))
 	}
-	if err := os.Rename(p, target); err != nil {
-		return "", false, err
+	if err := fileutil.WriteAtomic(target, data, info.Mode().Perm()); err != nil {
+		return err
 	}
-	return target, true, nil
+	r.lastBackup = target
+	return nil
+}
+
+// discardBackupLocked removes the backup created by backupLocked, used when the
+// settings write failed and the delete did not happen after all.
+func (r *Registry) discardBackupLocked() {
+	if r.lastBackup == "" {
+		return
+	}
+	_ = os.Remove(r.lastBackup)
+	r.lastBackup = ""
 }
 
 func (r *Registry) indexOfLocked(id string) int {
