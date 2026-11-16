@@ -74,17 +74,25 @@ func (s *Server) handleFetchWSDL(w http.ResponseWriter, r *http.Request) {
 		}
 		proxyCfg = req.Proxy
 	case req.ProjectID != "":
-		if p, err := storeFrom(r).Get(req.ProjectID); err == nil {
-			proxyCfg = p.Proxy
-			if proxyCfg == nil {
-				// A project without explicit settings means "system proxy".
-				proxyCfg = &model.ProxySettings{Mode: "system"}
-			}
+		// An explicitly named project must exist. Falling through to a direct
+		// connection would silently ignore the user's choice: on an intranet
+		// they would see "连不上" with no hint that the proxy they picked was
+		// never used. The project can be gone because another tab deleted it.
+		p, err := storeFrom(r).Get(req.ProjectID)
+		if err != nil {
+			writeErr(w, http.StatusNotFound,
+				"指定的工程不存在，无法复用其代理设置（可能已在其他窗口删除），请重新选择")
+			return
+		}
+		proxyCfg = p.Proxy
+		if proxyCfg == nil {
+			// A project without explicit settings means "system proxy".
+			proxyCfg = &model.ProxySettings{Mode: "system"}
 		}
 	}
 	if proxyCfg == nil {
-		// URL imports default to a direct connection; an unreachable/missing
-		// project should not silently fall back to an unrelated system proxy.
+		// Only reachable when neither a proxy nor a project was named: that is
+		// the dialog's default, a direct connection.
 		proxyCfg = &model.ProxySettings{Mode: "direct"}
 	}
 
