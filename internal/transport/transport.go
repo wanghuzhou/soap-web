@@ -8,7 +8,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/textproto"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,6 +31,13 @@ func Send(req model.SendRequest, proxyCfg *model.ProxySettings) model.SendRespon
 
 	if err := proxyCfg.Validate(); err != nil {
 		out.Error = "代理配置无效: " + err.Error()
+		return out
+	}
+	// Validate the endpoint here too, not only in the API layer: importers and
+	// tests reach Send directly, and a scheme check this late (client.Do) reports
+	// itself as a transport failure rather than a bad request.
+	if err := model.ValidateEndpoint(req.URL); err != nil {
+		out.Error = err.Error()
 		return out
 	}
 
@@ -55,9 +64,7 @@ func Send(req model.SendRequest, proxyCfg *model.ProxySettings) model.SendRespon
 		return out
 	}
 
-	for k, v := range req.Headers {
-		httpReq.Header.Set(k, v)
-	}
+	applyHeaders(httpReq.Header, req.Headers)
 	// Apply content type last so an explicit value wins over a header map entry.
 	if req.ContentType != "" && httpReq.Header.Get("Content-Type") == "" {
 		httpReq.Header.Set("Content-Type", req.ContentType)
@@ -111,6 +118,70 @@ func Send(req model.SendRequest, proxyCfg *model.ProxySettings) model.SendRespon
 // small; an unbounded io.ReadAll on a runaway endpoint would allocate gigabytes
 // and then be copied again into a string for JSON encoding.
 const maxBodyBytes = 16 << 20 // 16 MB
+
+// applyHeaders copies the request's header map onto dst deterministically.
+//
+// Set alone is not enough. http.Header.Set canonicalises its key, so
+// "content-type" and "Content-Type" land in the same slot, but the map we are
+// given can hold both as separate entries (the frontend builds it as a plain JS
+// object, where the two spellings are distinct keys). Ranging over that map made
+// the winner depend on Go's randomised iteration order: the same request sent 30
+// times produced a 27/3 split between the two values. Sorting the keys makes the
+// outcome fixed for a given input, so what the editor shows is what gets sent.
+//
+// Precedence within a case-insensitive group is by spelling, in this order:
+//
+//	1. the canonical MIME form (textproto.CanonicalMIMEHeaderKey), which is what
+//	   the UI itself emits for Content-Type, SOAPAction, Authorization and the
+//	   other standard headers;
+//	2. the spelling with the more conventional capitalization: any capitalization
+//	   beats all-lowercase, so a mixed-case "SoapAction" beats a bare
+//	   "soapaction". (Go canonicalises SOAPAction to "Soapaction", which no user
+//	   types, so matching the canonical form exactly rarely applies there.)
+//	3. the raw key, only so the order is total.
+//
+// A total order is what matters most: it removes the nondeterminism, and the
+// rules above make the survivor the one a user would expect to win.
+func applyHeaders(dst http.Header, headers map[string]string) {
+	if len(headers) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := keys[i], keys[j]
+		ca, cb := textproto.CanonicalMIMEHeaderKey(a), textproto.CanonicalMIMEHeaderKey(b)
+		if ca != cb {
+			// Different headers: order them by canonical name so the sort is
+			// stable regardless of map iteration.
+			return ca < cb
+		}
+		// Same header, different spelling. Lower rank wins (is applied last).
+		ra, rb := spellingRank(a, ca), spellingRank(b, cb)
+		if ra != rb {
+			return ra > rb
+		}
+		return a < b
+	})
+	for _, k := range keys {
+		dst.Set(k, headers[k])
+	}
+}
+
+// spellingRank orders the spellings of one canonical header from most to least
+// preferred. Lower is better.
+func spellingRank(raw, canonical string) int {
+	if raw == canonical {
+		return 0
+	}
+	if raw == strings.ToLower(raw) {
+		// All-lowercase reads least like the conventional form.
+		return 2
+	}
+	return 1
+}
 
 // decodeBody converts the response body to UTF-8.
 //

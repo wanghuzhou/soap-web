@@ -4,6 +4,7 @@ package model
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -266,6 +267,31 @@ type TestStep struct {
 	Endpoint string `json:"endpoint"`
 	Action   string `json:"action"`
 	Request  string `json:"request"` // raw XML body saved in the project
+}
+
+// ValidateEndpoint reports whether a request URL is one this tool may call: an
+// absolute http or https URL with a host.
+//
+// Without this check the scheme was only rejected deep inside client.Do, which
+// produced a confusing "unsupported protocol scheme" error after the request had
+// already been built — and, more importantly, left /api/send accepting arbitrary
+// schemes. The service listens on loopback by default, but -addr can expose it on
+// a network, where an unauthenticated endpoint that fetches any URL is an
+// unwanted request proxy. Remote WSDL fetching (wsdlfetch) already enforced
+// exactly these rules; this is the same boundary for sending.
+func ValidateEndpoint(rawURL string) error {
+	u, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("Endpoint 地址无效: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return fmt.Errorf("Endpoint 仅支持 http/https 协议，当前为 %q", u.Scheme)
+	}
+	if u.Host == "" || u.Hostname() == "" {
+		return errors.New("Endpoint 缺少主机名")
+	}
+	return nil
 }
 
 // SendRequest is the payload the frontend posts to execute an HTTP/SOAP call.
