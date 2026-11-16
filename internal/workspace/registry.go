@@ -116,6 +116,12 @@ func (r *Registry) Import(rawName string, projects []model.Project) (Info, error
 	if err != nil {
 		return Info{}, err
 	}
+	// One claimer for the whole array, not one per project: a workspace is a
+	// project array and the store addresses projects by id alone, so two
+	// projects sharing an id behave like one — Get returns the first and
+	// deleting it makes the second reappear. Per-project uniqueness would leave
+	// exactly that case open.
+	claim := store.NewIDClaimer()
 	for i := range projects {
 		if err := projects[i].Proxy.Validate(); err != nil {
 			return Info{}, fmt.Errorf("%w：工程「%s」的代理配置无效: %v", ErrInvalidProject, projects[i].Name, err)
@@ -123,7 +129,7 @@ func (r *Registry) Import(rawName string, projects []model.Project) (Info, error
 		if err := model.ValidateProjectResponses(projects[i]); err != nil {
 			return Info{}, fmt.Errorf("%w：工程「%s」: %v", ErrInvalidProject, projects[i].Name, err)
 		}
-		store.EnsureIDs(&projects[i])
+		store.EnsureIDsIn(&projects[i], claim)
 	}
 
 	r.mu.Lock()

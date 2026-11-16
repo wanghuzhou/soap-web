@@ -389,11 +389,12 @@ func (s *Store) DeleteProject(id string) error {
 
 // AddService appends a service to a project.
 func (s *Store) AddService(projectID string, svc model.Service) (model.Service, error) {
-	if svc.ID == "" {
-		svc.ID = NewID()
-	}
+	// The service is new to the project, so only its own subtree has to be
+	// self-consistent: nothing being inserted can collide with what it joins.
+	claim := NewIDClaimer()
+	svc.ID = claim(svc.ID)
 	for i := range svc.Operations {
-		assignOperationIDs(&svc.Operations[i])
+		assignOperationIDs(&svc.Operations[i], claim)
 	}
 	err := s.commit(func(list []model.Project) ([]model.Project, error) {
 		pi := indexOfProject(list, projectID)
@@ -420,7 +421,8 @@ func (s *Store) DeleteService(projectID, serviceID string) error {
 
 // AddOperation appends an operation to a service.
 func (s *Store) AddOperation(projectID, serviceID string, op model.Operation) (model.Operation, error) {
-	assignOperationIDs(&op)
+	// As in AddService: only the inserted subtree needs to be self-consistent.
+	assignOperationIDs(&op, NewIDClaimer())
 	err := s.commit(func(list []model.Project) ([]model.Project, error) {
 		pi, si, ok := locateService(list, projectID, serviceID)
 		if !ok {
@@ -589,28 +591,67 @@ func copyTitle(title string, siblings []model.Call) string {
 	}
 }
 
-// EnsureIDs fills in missing ids throughout a project tree.
-func EnsureIDs(p *model.Project) {
-	if p.ID == "" {
-		p.ID = NewID()
-	}
-	for i := range p.Services {
-		if p.Services[i].ID == "" {
-			p.Services[i].ID = NewID()
+// IDClaimer hands out ids unique within one scope. Blank or repeated ids are
+// replaced with fresh ones; everything else is kept, so a healthy tree never
+// churns (a reassigned id would break an open tab's selection).
+//
+// Callers that own several trees in one namespace — an imported workspace file
+// is a project array — create a single claimer and thread it through, because
+// per-tree uniqueness is not enough: two projects may not share an id either.
+type IDClaimer func(id string) string
+
+// NewIDClaimer starts a fresh uniqueness scope.
+func NewIDClaimer() IDClaimer {
+	seen := map[string]bool{}
+	return func(id string) string {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			return id
 		}
-		for j := range p.Services[i].Operations {
-			assignOperationIDs(&p.Services[i].Operations[j])
+		// Ids are 8 random bytes, so a fresh one colliding is effectively
+		// impossible; the loop is here so that "effectively impossible" cannot
+		// quietly become a duplicate.
+		for {
+			next := NewID()
+			if !seen[next] {
+				seen[next] = true
+				return next
+			}
 		}
 	}
 }
 
-func assignOperationIDs(op *model.Operation) {
-	if op.ID == "" {
-		op.ID = NewID()
-	}
-	for i := range op.Calls {
-		if op.Calls[i].ID == "" {
-			op.Calls[i].ID = NewID()
+// EnsureIDs gives every node in a project tree a unique id.
+func EnsureIDs(p *model.Project) {
+	EnsureIDsIn(p, NewIDClaimer())
+}
+
+// EnsureIDsIn is EnsureIDs using a caller-supplied claimer, so ids stay unique
+// across several projects of the same workspace.
+//
+// Uniqueness is not cosmetic: every lookup (indexOfProject, locateService,
+// locateOperation and the call loops) takes the first match on an id, so a
+// second node sharing one is unreachable — Get returns the first, UpdateCall
+// writes the first, and deleting the first makes the second reappear on the next
+// render. A hand-written or exported workspace file is the easy way to end up
+// with duplicates, since nothing in the JSON format prevents them. A collision is
+// reissued rather than rejected so an import still succeeds; only the second and
+// later occurrences change.
+func EnsureIDsIn(p *model.Project, claim IDClaimer) {
+	p.ID = claim(p.ID)
+	for i := range p.Services {
+		p.Services[i].ID = claim(p.Services[i].ID)
+		for j := range p.Services[i].Operations {
+			assignOperationIDs(&p.Services[i].Operations[j], claim)
 		}
+	}
+}
+
+// assignOperationIDs gives an operation and its calls unique ids, sharing the
+// caller's claimer so ids stay unique across the whole subtree.
+func assignOperationIDs(op *model.Operation, claim IDClaimer) {
+	op.ID = claim(op.ID)
+	for i := range op.Calls {
+		op.Calls[i].ID = claim(op.Calls[i].ID)
 	}
 }
