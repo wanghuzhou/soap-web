@@ -13,7 +13,7 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 - **完整增删改**：工程 / 服务(service) / 操作(operation) / 请求样例(call) 均可新建、重命名、删除；删除有二次确认。
 - **工程级代理**：每个工程可单独设置 **系统代理 / 直连 / 自定义代理**；自定义支持 **HTTP** 与 **SOCKS5**，用户名密码可留空。用于内网服务无法直连的场景。
 - **工程重命名 & 导出**：可重命名工程；可导出为 SoapUI 兼容的 `.xml`，方便带回 SoapUI 或分享给同事（导出的工程可再次被本工具导入，结构一致）。
-- **导入 SoapUI 工程**：解析 `.xml` 工程，载入 service / operation / 测试用例步骤及其已保存的请求报文与 endpoint，可一键重发。
+- **导入 SoapUI 工程**：解析 `.xml` 工程，载入 service / operation 及其已保存的请求报文与 endpoint，可一键重发。工程里的测试套件（testSuite / testCase / testStep）会**原样保留、随工程保存并重新导出**，保证换回 SoapUI 时不丢数据，但**界面上不展示、不能直接重发**——需要用测试步骤里的报文时，把它复制到所在的 operation 下新建一个请求样例即可。
 - **WSDL 解析**：解析 WSDL 1.1 + 内嵌 XSD，列出所有 operation，并为每个 operation 自动生成一条结构正确的请求样例（支持嵌套 complexType、extension 继承、choice 降级）。
 - **WSDL URL 导入**：除本地文件外，可直接填写 `http://host/service?wsdl` 由后端抓取并解析，适用于只有内网可达的服务；下载支持**直连（默认）/ 系统代理 / 自定义 HTTP·SOCKS5 代理**，也可复用已有工程的代理配置；支持 GBK 等非 UTF-8 编码，并对协议（仅 http/https）、大小（8 MB）与超时（30s）做限制。
 - **SOAP 请求发送**：支持 SOAP 1.1（`text/xml` + `SOAPAction`）与 SOAP 1.2（`application/soap+xml` + action）。
@@ -33,6 +33,8 @@ soap-web 是一个**单二进制、免安装、Web 界面、矢量渲染任意�
 
 > 范围说明：本项目**只做**"导入 + WSDL 生成请求模板 + 发送测试"。
 > 不包含断言引擎、Groovy 脚本、WS-Security —— 这些是 SoapUI 兼容的深水区，明确不在范围内。
+>
+> 对应地，SoapUI 的**测试套件**（testSuite / testCase / testStep）只做**数据保留**：导入时原样读入、随工程存盘、导出时原样写回，但既不显示也不执行，没有"运行测试用例"这一层。调试单个接口请用 operation 下的请求样例，那些是可以直接发送和保存响应的。
 
 ## 运行
 
