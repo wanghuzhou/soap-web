@@ -125,6 +125,20 @@ func newSchemaIndex(schemas []schemaElem) *schemaIndex {
 	return idx
 }
 
+// maxElementDepth bounds how deep the generated template may nest. Recursive
+// and mutually-recursive schema types are common in real WSDLs (a tree node
+// whose child is the same type, folder-in-folder, ...), and element recursion
+// has no natural end: unbounded, it recursed forever and exhausted the stack,
+// which on Windows kills the process outright instead of failing one request.
+const maxElementDepth = 16
+
+// maxTemplateBytes bounds the size of one generated template. Depth alone does
+// not bound the output: a wide schema (a type with N children, each with N
+// children) grows exponentially with depth. Once the budget is spent the writer
+// stops emitting and the caller trims the document to a comment, so a hostile
+// or merely huge WSDL cannot turn into a multi-megabyte project.
+const maxTemplateBytes = 1 << 20 // 1 MB
+
 // buildRequest generates an XML request template for the given root element.
 // It returns the payload and the prefix bound to targetNS ("" when no
 // namespace is used). The root element is namespace-qualified; descendants are
@@ -146,37 +160,45 @@ func (idx *schemaIndex) buildRequest(rootElem, targetNS string) (string, string)
 	}
 	qualified := idx.elemQualified[rootElem]
 	var b strings.Builder
-	idx.writeRoot(&b, el, rootQName, prefix, targetNS, qualified, 0)
+	w := &templateWriter{b: &b, visiting: map[string]bool{}}
+	idx.writeRoot(w, el, rootQName, prefix, targetNS, qualified, 0)
+	if b.Len() > maxTemplateBytes {
+		// Truncated output is not a usable template; say so rather than save
+		// half a document that looks editable but is broken XML.
+		return fmt.Sprintf("<!-- 请求结构过大（超过 %d KB），已省略，请手动编写 -->", maxTemplateBytes>>10), prefix
+	}
 	return b.String(), prefix
+}
+
+// templateWriter carries the state shared by one template expansion: the
+// output buffer, the types currently being expanded (for cycle detection) and
+// the remaining size budget.
+type templateWriter struct {
+	b        *strings.Builder
+	visiting map[string]bool
 }
 
 // writeRoot writes the request's root element, declaring xmlns:<prefix> inline
 // when a namespace is present.
-func (idx *schemaIndex) writeRoot(b *strings.Builder, el xsElement, qname, prefix, targetNS string, qualified bool, depth int) {
+func (idx *schemaIndex) writeRoot(w *templateWriter, el xsElement, qname, prefix, targetNS string, qualified bool, depth int) {
 	nsDecl := ""
 	if prefix != "" && targetNS != "" {
 		nsDecl = fmt.Sprintf(` xmlns:%s="%s"`, prefix, targetNS)
 	}
-	idx.writeElement(b, el, qname, nsDecl, prefix, qualified, depth)
-}
-
-// writeChild writes a descendant element. When the schema is qualified the
-// element name carries the same prefix as the root; otherwise it is plain.
-func (idx *schemaIndex) writeChild(b *strings.Builder, el xsElement, prefix string, qualified bool, depth int) {
-	local := localName(el.Name)
-	if local == "" {
-		return
-	}
-	name := local
-	if qualified && prefix != "" {
-		name = prefix + ":" + local
-	}
-	idx.writeElement(b, el, name, "", prefix, qualified, depth)
+	idx.writeElement(w, el, qname, nsDecl, prefix, qualified, depth)
 }
 
 // writeElement emits one element and its subtree. name is the qualified name to
 // write and nsDecl is an optional inline namespace declaration (root only).
-func (idx *schemaIndex) writeElement(b *strings.Builder, el xsElement, name, nsDecl, prefix string, qualified bool, depth int) {
+//
+// Two guards keep a recursive or pathologically wide schema from running away:
+// depth is capped, and a type already on the current expansion path is not
+// expanded again (that is exactly what a cycle looks like). A truncated branch
+// emits a comment, so the result stays well-formed XML the user can edit.
+func (idx *schemaIndex) writeElement(w *templateWriter, el xsElement, name, nsDecl, prefix string, qualified bool, depth int) {
+	if w.b.Len() >= maxTemplateBytes {
+		return
+	}
 	indent := strings.Repeat("  ", depth)
 	ct := el.Complex
 	typeName := localName(el.Type)
@@ -186,23 +208,62 @@ func (idx *schemaIndex) writeElement(b *strings.Builder, el xsElement, name, nsD
 		}
 	}
 	if ct == nil {
-		b.WriteString(fmt.Sprintf("%s<%s%s>%s</%s>\n", indent, name, nsDecl, sampleValue(typeName, el.Simple), name))
+		w.b.WriteString(fmt.Sprintf("%s<%s%s>%s</%s>\n", indent, name, nsDecl, sampleValue(typeName, el.Simple), name))
 		return
 	}
+
+	// A complex type nested inline has no name of its own, so it is keyed by
+	// the element it was declared on; a named type is keyed by its name. Either
+	// way the key identifies "which type are we inside right now".
+	key := typeName
+	if key == "" {
+		key = el.Name
+	}
+
 	children, attrs := idx.collectMembers(ct, 0)
 	attrStr := ""
 	for _, a := range attrs {
 		attrStr += fmt.Sprintf(` %s=""`, a)
 	}
 	if len(children) == 0 && len(attrs) == 0 {
-		b.WriteString(fmt.Sprintf("%s<%s%s/>\n", indent, name, nsDecl))
+		w.b.WriteString(fmt.Sprintf("%s<%s%s/>\n", indent, name, nsDecl))
 		return
 	}
-	b.WriteString(fmt.Sprintf("%s<%s%s%s>\n", indent, name, nsDecl, attrStr))
-	for _, ch := range children {
-		idx.writeChild(b, ch, prefix, qualified, depth+1)
+
+	budgetExceeded := depth+1 >= maxElementDepth || w.visiting[key]
+	w.b.WriteString(fmt.Sprintf("%s<%s%s%s>\n", indent, name, nsDecl, attrStr))
+	if budgetExceeded {
+		reason := "嵌套过深"
+		if w.visiting[key] {
+			reason = "递归类型"
+		}
+		w.b.WriteString(fmt.Sprintf("%s  <!-- %s，子节点已省略，请按需补全 -->\n", indent, reason))
+	} else {
+		if key != "" {
+			w.visiting[key] = true
+		}
+		for _, ch := range children {
+			idx.writeChild(w, ch, prefix, qualified, depth+1)
+		}
+		if key != "" {
+			delete(w.visiting, key)
+		}
 	}
-	b.WriteString(fmt.Sprintf("%s</%s>\n", indent, name))
+	w.b.WriteString(fmt.Sprintf("%s</%s>\n", indent, name))
+}
+
+// writeChild writes a descendant element. When the schema is qualified the
+// element name carries the same prefix as the root; otherwise it is plain.
+func (idx *schemaIndex) writeChild(w *templateWriter, el xsElement, prefix string, qualified bool, depth int) {
+	local := localName(el.Name)
+	if local == "" {
+		return
+	}
+	name := local
+	if qualified && prefix != "" {
+		name = prefix + ":" + local
+	}
+	idx.writeElement(w, el, name, "", prefix, qualified, depth)
 }
 
 // collectMembers resolves all element members of a complexType, following
