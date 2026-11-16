@@ -121,7 +121,7 @@ const { state } = await import(new URL('state.js', base).href);
 const { renderTree, initTree } = await import(new URL('tree.js', base).href);
 const { buildCurl, sensitiveNames } = await import(new URL('curl.js', base).href);
 const { isSensitiveName, TIMEOUT, applyServerLimits } = await import(new URL('constants.js', base).href);
-const { applyTreeFilter, getQuery } = await import(new URL('tree/search.js', base).href);
+const { applyTreeFilter, getQuery, reveal, forgetRevealed } = await import(new URL('tree/search.js', base).href);
 const { applyRowEdit, mergeRows } = await import(new URL('headers.js', base).href);
 const { savedResponsePayload } = await import(new URL('response.js', base).href);
 const { fileSafeName } = await import(new URL('download.js', base).href);
@@ -262,6 +262,71 @@ getEl('treeSearch').listeners.input.forEach((fn) => fn({ target: getEl('treeSear
 check('清空搜索后恢复折叠状态',
   rowBy('oid', 'o1').classes.has('is-hidden') && rowBy('cid', 'c1').classes.has('is-hidden')
   && !rowBy('pid', 'p1').classes.has('is-hidden'),
+  JSON.stringify(treeEl.children.map((r) => [r.dataset.kind, r.classes.has('is-hidden')])));
+
+// ---------- a node created under an active filter stays visible ----------
+// Regression: creating a request while a filter was active left it hidden, since
+// its default title ("新请求 10:31:05") rarely matches the search term. The row
+// appeared to vanish the moment it was created, and the in-place rename that
+// follows had nothing to edit. reveal() marks a fresh node as always-visible
+// until the query changes.
+const revealFixture = [
+  { id: 'p1', name: 'Project', source: 'native', services: [{ id: 's1', name: 'Service', operations: [
+    { id: 'o1', name: 'Operation', calls: [
+      { id: 'c1', title: 'cancel order', request: '<x/>' },
+      { id: 'c2', title: '新请求 10:31:05', request: '<x/>' },
+    ] },
+  ] }] },
+];
+
+getEl('treeSearch').value = 'cancel';
+getEl('treeSearch').listeners.input.forEach((fn) => fn({ target: getEl('treeSearch') }));
+state.projects = revealFixture;
+renderTree();
+const hiddenBefore = rowBy('cid', 'c2').classes.has('is-hidden');
+check('过滤生效时非命中节点隐藏', hiddenBefore === true,
+  JSON.stringify([...rowBy('cid', 'c2').classes]));
+
+// The creation path calls reveal() before the re-render that follows a reload.
+reveal('c2');
+renderTree();
+check('过滤期间新建的节点保持可见', !rowBy('cid', 'c2').classes.has('is-hidden'),
+  JSON.stringify([...rowBy('cid', 'c2').classes]));
+check('被揭开节点的祖先路径也可见',
+  !rowBy('pid', 'p1').classes.has('is-hidden') && !rowBy('sid', 's1').classes.has('is-hidden')
+  && !rowBy('oid', 'o1').classes.has('is-hidden'));
+// Narrow by design: revealing one node must not turn the filter off for its
+// siblings, or the result list would silently stop being a result list. The
+// fixture's c1 ("cancel order") matches and c2 is the revealed one, so add a
+// third sibling that matches neither to prove it is still hidden.
+revealFixture[0].services[0].operations[0].calls.push(
+  { id: 'c3', title: 'create invoice', request: '<x/>' },
+);
+state.projects = revealFixture;
+reveal('c2');
+renderTree();
+check('揭开一个节点不放过同级的非命中节点',
+  rowBy('cid', 'c3').classes.has('is-hidden'),
+  JSON.stringify([...rowBy('cid', 'c3').classes]));
+
+// The reveal is a one-shot aid for the node just created, not a permanent
+// exemption: a new search must filter everything again.
+getEl('treeSearch').value = 'cancel order';
+getEl('treeSearch').listeners.input.forEach((fn) => fn({ target: getEl('treeSearch') }));
+check('改变过滤词后揭开状态失效', rowBy('cid', 'c2').classes.has('is-hidden'),
+  '换搜索词之后新建节点仍然可见');
+
+// A workspace switch drops the marks, whose ids no longer refer to anything.
+reveal('c2');
+forgetRevealed();
+state.collapsed = {};
+renderTree();
+check('切换工作空间后不残留揭开状态', rowBy('cid', 'c2').classes.has('is-hidden'));
+
+// Clearing the filter restores everything in the tree that is currently loaded.
+getEl('treeSearch').value = '';
+getEl('treeSearch').listeners.input.forEach((fn) => fn({ target: getEl('treeSearch') }));
+check('清空过滤后全部可见', treeEl.children.every((r) => !r.classes.has('is-hidden')),
   JSON.stringify(treeEl.children.map((r) => [r.dataset.kind, r.classes.has('is-hidden')])));
 
 // ---------- header merge rules ----------

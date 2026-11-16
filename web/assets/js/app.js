@@ -5,7 +5,7 @@ import { state, initCollapsed, findService, findOperation, findCall, workspaceLa
 import { apiGet, apiHealth, apiJSON, apiUpload, path } from './api.js';
 import { toast } from './toast.js';
 import { initTheme } from './theme.js';
-import { initTree, renderTree, syncSelection } from './tree.js';
+import { initTree, renderTree, syncSelection, resetTreeFilterState } from './tree.js';
 import { initEditor, loadNode, updateEditButtons, isDirty, resetEditor, cancelSend } from './editor.js';
 import { initResponse } from './response.js';
 import { initProxy } from './proxy.js';
@@ -256,6 +256,9 @@ async function boot() {
       cancelSend();
       resetEditor();
       initCollapsed(state.workspaceId);
+      // Drop forced-visibility marks from the previous workspace's new nodes;
+      // its ids mean nothing against the dataset about to be loaded.
+      resetTreeFilterState();
       await loadProjects(false);
     },
     onExport: openExportDialog,

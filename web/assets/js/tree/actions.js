@@ -8,6 +8,7 @@ import { openProxyDialog } from '../proxy.js';
 import { openRowMenu } from '../rowmenu.js';
 import { startInlineRename } from '../inlineedit.js';
 import { isCollapsed, updateRowLabel } from './render.js';
+import { reveal } from './search.js';
 
 let hooks = {
   onSelect: () => {},
@@ -183,8 +184,12 @@ const TREE_ACTIONS = {
     // in-place rename so the user can name it without an extra dialog.
     const url = projectPath(data.pid, 'services', data.sid, 'operations', data.oid, 'calls');
     const created = await apiJSON('POST', url, { title: '' });
-    // The new call must be visible for the inline rename input to exist; make
-    // sure a previously collapsed operation is expanded before re-rendering.
+    // The new call must be visible for the inline rename input to exist. An
+    // active filter would hide it — a default title such as "新请求 10:31:05"
+    // rarely matches what is being searched for — so reveal it before the
+    // re-render, which re-applies the filter and would otherwise drop it.
+    reveal(created.id);
+    // Likewise make sure a previously collapsed operation is expanded.
     if (isCollapsed(data.oid)) toggleCollapsed(data.oid);
     await hooks.reload();
     const ids = { pid: data.pid, sid: data.sid, oid: data.oid, cid: created.id };
@@ -210,6 +215,9 @@ const TREE_ACTIONS = {
   'duplicate-call': async (data) => {
     const url = projectPath(data.pid, 'services', data.sid, 'operations', data.oid, 'calls', data.cid, 'duplicate');
     const copied = await apiJSON('POST', url);
+    // The copy is titled "… (副本)", which an active filter is unlikely to
+    // match; keep it visible so the user sees the result of the action.
+    reveal(copied.id);
     if (isCollapsed(data.oid)) toggleCollapsed(data.oid);
     await hooks.reload();
     const ids = { pid: data.pid, sid: data.sid, oid: data.oid, cid: copied.id };

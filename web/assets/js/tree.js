@@ -5,9 +5,16 @@ import { $ } from './dom.js';
 import { renderTree, syncSelection, toggleNode, applyCollapseVisibility } from './tree/render.js';
 import { initTreeNav, selectRow } from './tree/nav.js';
 import { initTreeActions, handleTreeAction, openProjectMenu, deleteNode } from './tree/actions.js';
-import { initTreeSearch, getQuery } from './tree/search.js';
+import { initTreeSearch, getQuery, forgetRevealed } from './tree/search.js';
 
 export { renderTree, syncSelection, toggleNode, deleteNode };
+
+// resetTreeFilterState drops the forced-visibility marks used for freshly
+// created nodes. Called on a workspace switch, where the previous ids refer to
+// projects that are no longer loaded.
+export function resetTreeFilterState() {
+  forgetRevealed();
+}
 
 export function initTree(options) {
   initTreeActions(options);

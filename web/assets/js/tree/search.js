@@ -14,6 +14,14 @@ import { $ } from '../dom.js';
 let query = '';
 let onChange = () => {};
 
+// revealed holds ids that must stay visible even though they do not match the
+// filter. It exists for nodes the user just created: making a new request while
+// a filter is active used to leave it hidden, so the row "vanished" the moment
+// it was created and the in-place rename that follows had nothing to edit. The
+// set is cleared whenever the query changes, because a new search should filter
+// everything again.
+const revealed = new Set();
+
 export function initTreeSearch({ onChange: handler } = {}) {
   onChange = handler || onChange;
   const input = $('treeSearch');
@@ -43,10 +51,27 @@ export function getQuery() {
   return query;
 }
 
+// reveal keeps a node (and therefore its ancestors) visible under an active
+// filter. Called for freshly created nodes; without it the new row is filtered
+// out immediately and looks like the create failed.
+export function reveal(nodeID) {
+  if (!nodeID) return;
+  revealed.add(nodeID);
+}
+
+// forgetRevealed drops the forced-visibility marks. Used when the tree is
+// rebuilt from scratch for a different dataset (a workspace switch), where the
+// old ids mean nothing.
+export function forgetRevealed() {
+  revealed.clear();
+}
+
 function setQuery(raw) {
   const next = String(raw || '').trim().toLowerCase();
   if (next === query) return;
   query = next;
+  // A new search re-filters everything, including nodes revealed earlier.
+  revealed.clear();
   const clear = $('treeSearchClear');
   if (clear) clear.classList.toggle('hidden', !query);
   applyTreeFilter();
@@ -60,20 +85,38 @@ function matchInfo(tree) {
   const rows = Array.from(tree.querySelectorAll('.tree-node'));
   const self = new Map(); // row -> matched directly
   const keep = new Set(); // rows to show
+  const ancestorOf = new Map(); // row -> parent row, resolved once below
+
+  rows.forEach((row) => {
+    ancestorOf.set(row, parentRowOf(tree, row));
+  });
 
   rows.forEach((row) => {
     const label = row.querySelector('.lbl');
     const text = (label ? label.textContent : '').toLowerCase();
-    if (!text.includes(query)) return;
+    // A revealed node counts as a match so the path to it stays visible.
+    const matches = text.includes(query) || revealed.has(nodeIDOf(row));
+    if (!matches) return;
     self.set(row, true);
     // Keep the row and walk up to its ancestors so the path is visible.
     let node = row;
     while (node) {
       keep.add(node);
-      node = parentRowOf(tree, node);
+      node = ancestorOf.get(node) || null;
     }
   });
   return { self, keep };
+}
+
+// nodeIDOf returns the id a row is addressed by: the node's own id for
+// projects, services and operations, and the call id for a request sample.
+// Collapse state uses the same convention.
+function nodeIDOf(row) {
+  const d = row.dataset;
+  if (d.kind === 'call') return d.cid;
+  if (d.kind === 'op') return d.oid;
+  if (d.kind === 'svc') return d.sid;
+  return d.pid;
 }
 
 // parentRowOf finds the enclosing row of a given row. The markup nests rows in
