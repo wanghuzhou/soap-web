@@ -145,6 +145,12 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "缺少 url")
 		return
 	}
+	// Reject a non-http(s) or host-less URL here rather than letting it fail
+	// inside the transport with an opaque "unsupported protocol scheme" error.
+	if err := model.ValidateEndpoint(req.URL); err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	headers := headersFromMap(req.Headers)
 	if err := model.ValidateHeaders(headers); err != nil {
 		writeErr(w, http.StatusBadRequest, err.Error())
