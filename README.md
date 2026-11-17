@@ -1,3 +1,6 @@
+> 换了个新架构，用go原生桌面端 https://github.com/wanghuzhou/soap-go
+> 这个版本不维护了
+
 # soap-web
 
 SOAP / WSDL 接口调试工具 —— 以 Go 为核心的现代 Web 版 SoapUI 替代方案。
